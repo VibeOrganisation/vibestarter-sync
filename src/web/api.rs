@@ -26,7 +26,7 @@ use crate::{
         interface::{
             ErrorResponse, Instance, MessagesPacket, OpenResponse, ReadResponse,
             ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
-            WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
+            VibeStarterStatusResponse, WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
         },
         util::{json, json_ok},
     },
@@ -38,6 +38,7 @@ pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) 
 
     match (request.method(), request.uri().path()) {
         (&Method::GET, "/api/rojo") => service.handle_api_rojo().await,
+        (&Method::GET, "/api/vibestarter/status") => service.handle_vibestarter_status().await,
         (&Method::GET, path) if path.starts_with("/api/read/") => {
             service.handle_api_read(request).await
         }
@@ -96,6 +97,25 @@ impl ApiService {
             place_id: self.serve_session.place_id(),
             game_id: self.serve_session.game_id(),
             root_instance_id,
+        })
+    }
+
+    /// VibeStarter Sync extension: structured session/connection state for the
+    /// host app, replacing log-scraping of "WebSocket subscription
+    /// established/closed".
+    async fn handle_vibestarter_status(&self) -> Response<Body> {
+        let root_instance_id = self.serve_session.tree().get_root_id();
+        let socket_client_count = self.serve_session.socket_client_count();
+
+        json_ok(&VibeStarterStatusResponse {
+            server_version: SERVER_VERSION.to_owned(),
+            protocol_version: PROTOCOL_VERSION,
+            session_id: self.serve_session.session_id(),
+            project_name: self.serve_session.project_name().to_owned(),
+            root_instance_id,
+            message_cursor: self.serve_session.message_queue().cursor(),
+            socket_client_count,
+            studio_connected: socket_client_count > 0,
         })
     }
 
@@ -447,6 +467,23 @@ fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
         .map(|path| path.to_owned())
 }
 
+/// VibeStarter Sync: RAII guard that counts an active WebSocket subscription on
+/// the session while held, decrementing on drop (any exit path of the loop).
+struct SocketClientGuard(Arc<ServeSession>);
+
+impl SocketClientGuard {
+    fn new(serve_session: Arc<ServeSession>) -> Self {
+        serve_session.socket_connected();
+        SocketClientGuard(serve_session)
+    }
+}
+
+impl Drop for SocketClientGuard {
+    fn drop(&mut self) {
+        self.0.socket_disconnected();
+    }
+}
+
 /// Handle WebSocket connection for streaming subscription messages
 async fn handle_websocket_subscription(
     serve_session: Arc<ServeSession>,
@@ -463,6 +500,9 @@ async fn handle_websocket_subscription(
         "WebSocket subscription established for session {}",
         session_id
     );
+
+    // VibeStarter Sync: count this as a connected client until the loop exits.
+    let _client_guard = SocketClientGuard::new(Arc::clone(&serve_session));
 
     // Now continuously listen for new messages using select to handle both incoming messages
     // and WebSocket control messages concurrently

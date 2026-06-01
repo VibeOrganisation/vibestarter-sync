@@ -3,7 +3,10 @@ use std::{
     io,
     net::IpAddr,
     path::Path,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::Instant,
 };
 
@@ -85,6 +88,11 @@ pub struct ServeSession {
     /// A channel to send mutation requests on. These will be handled by the
     /// ChangeProcessor and trigger changes in the tree.
     tree_mutation_sender: Sender<PatchSet>,
+
+    /// VibeStarter Sync: number of currently established WebSocket subscriptions
+    /// (i.e. connected Studio plugins). Replaces log-scraping of
+    /// "WebSocket subscription established/closed" with a structured signal.
+    socket_client_count: AtomicUsize,
 }
 
 impl ServeSession {
@@ -144,6 +152,7 @@ impl ServeSession {
             message_queue,
             tree_mutation_sender,
             vfs,
+            socket_client_count: AtomicUsize::new(0),
         })
     }
 
@@ -213,6 +222,25 @@ impl ServeSession {
 
     pub fn root_project(&self) -> &Project {
         &self.root_project
+    }
+
+    /// VibeStarter Sync: number of currently connected WebSocket clients.
+    pub fn socket_client_count(&self) -> usize {
+        self.socket_client_count.load(Ordering::SeqCst)
+    }
+
+    /// VibeStarter Sync: record a newly established WebSocket subscription.
+    /// Returns the new client count.
+    pub fn socket_connected(&self) -> usize {
+        self.socket_client_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// VibeStarter Sync: record a closed WebSocket subscription.
+    /// Returns the new client count.
+    pub fn socket_disconnected(&self) -> usize {
+        self.socket_client_count
+            .fetch_sub(1, Ordering::SeqCst)
+            .saturating_sub(1)
     }
 }
 

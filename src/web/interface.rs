@@ -167,6 +167,23 @@ pub struct ServerInfoResponse {
     pub root_instance_id: Ref,
 }
 
+/// Response body from /api/vibestarter/status — VibeStarter Sync extension.
+///
+/// Structured session/connection state for the host app, so it no longer needs
+/// to scrape "WebSocket subscription established/closed" lines from logs.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VibeStarterStatusResponse {
+    pub server_version: String,
+    pub protocol_version: u64,
+    pub session_id: SessionId,
+    pub project_name: String,
+    pub root_instance_id: Ref,
+    pub message_cursor: u32,
+    pub socket_client_count: usize,
+    pub studio_connected: bool,
+}
+
 /// Response body from /api/read/{id}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
