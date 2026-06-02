@@ -15,7 +15,7 @@ use memofs::Vfs;
 use thiserror::Error;
 
 use crate::{
-    change_processor::ChangeProcessor,
+    change_processor::{ChangeProcessor, SyncStatus},
     message_queue::MessageQueue,
     project::{Project, ProjectError},
     session_id::SessionId,
@@ -93,6 +93,11 @@ pub struct ServeSession {
     /// (i.e. connected Studio plugins). Replaces log-scraping of
     /// "WebSocket subscription established/closed" with a structured signal.
     socket_client_count: AtomicUsize,
+
+    /// VibeStarter Sync: shared snapshot of recent sync activity (last patch
+    /// time/summary and last error), written by the ChangeProcessor and exposed
+    /// through `/api/vibestarter/status`.
+    sync_status: Arc<SyncStatus>,
 }
 
 impl ServeSession {
@@ -135,12 +140,15 @@ impl ServeSession {
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
 
+        let sync_status = Arc::new(SyncStatus::default());
+
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
             Arc::clone(&tree),
             Arc::clone(&vfs),
             Arc::clone(&message_queue),
             tree_mutation_receiver,
+            Arc::clone(&sync_status),
         );
 
         Ok(Self {
@@ -153,6 +161,7 @@ impl ServeSession {
             tree_mutation_sender,
             vfs,
             socket_client_count: AtomicUsize::new(0),
+            sync_status,
         })
     }
 
@@ -241,6 +250,11 @@ impl ServeSession {
         self.socket_client_count
             .fetch_sub(1, Ordering::SeqCst)
             .saturating_sub(1)
+    }
+
+    /// VibeStarter Sync: snapshot of recent sync activity for the status endpoint.
+    pub fn sync_status(&self) -> &SyncStatus {
+        &self.sync_status
     }
 }
 

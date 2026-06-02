@@ -1,6 +1,7 @@
 use std::{
     fs,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use crossbeam_channel::{select, Receiver, RecvError, Sender};
@@ -15,6 +16,71 @@ use crate::{
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
 };
+
+/// VibeStarter Sync: a lightweight, shared snapshot of recent sync activity.
+///
+/// The change processor writes to it whenever it applies a patch or hits an
+/// error; `ServeSession` exposes it through `/api/vibestarter/status` so the
+/// host app can show "synced Xs ago" and real sync errors instead of scraping
+/// logs.
+#[derive(Debug, Default)]
+pub struct SyncStatus {
+    inner: Mutex<SyncStatusInner>,
+}
+
+#[derive(Debug, Default)]
+struct SyncStatusInner {
+    last_patch_at: Option<Instant>,
+    last_patch_summary: Option<String>,
+    last_error: Option<String>,
+}
+
+impl SyncStatus {
+    /// Record a successfully applied patch. Clears any prior error, since the
+    /// most recent sync operation succeeded.
+    fn record_patch(&self, summary: String) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.last_patch_at = Some(Instant::now());
+        inner.last_patch_summary = Some(summary);
+        inner.last_error = None;
+    }
+
+    /// Record an error encountered while processing a file change.
+    fn record_error(&self, error: String) {
+        self.inner.lock().unwrap().last_error = Some(error);
+    }
+
+    /// Snapshot for the status endpoint: (age of the last patch in seconds,
+    /// summary of the last patch, last error).
+    pub fn snapshot(&self) -> (Option<u64>, Option<String>, Option<String>) {
+        let inner = self.inner.lock().unwrap();
+        (
+            inner.last_patch_at.map(|t| t.elapsed().as_secs()),
+            inner.last_patch_summary.clone(),
+            inner.last_error.clone(),
+        )
+    }
+}
+
+/// Build a short human-readable summary of a batch of applied patches, e.g.
+/// "3 added · 1 updated". Zero-count categories are omitted.
+fn format_patch_summary(added: usize, removed: usize, updated: usize) -> String {
+    let mut parts = Vec::new();
+    if added > 0 {
+        parts.push(format!("{} added", added));
+    }
+    if updated > 0 {
+        parts.push(format!("{} updated", updated));
+    }
+    if removed > 0 {
+        parts.push(format!("{} removed", removed));
+    }
+    if parts.is_empty() {
+        "no changes".to_owned()
+    } else {
+        parts.join(" · ")
+    }
+}
 
 /// Processes file change events, updates the DOM, and sends those updates
 /// through a channel for other stuff to consume.
@@ -51,6 +117,7 @@ impl ChangeProcessor {
         vfs: Arc<Vfs>,
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
+        sync_status: Arc<SyncStatus>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -58,6 +125,7 @@ impl ChangeProcessor {
             tree,
             vfs,
             message_queue,
+            sync_status,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -111,6 +179,10 @@ struct JobThreadContext {
     /// Whenever changes are applied to the DOM, we should push those changes
     /// into this message queue to inform any connected clients.
     message_queue: Arc<MessageQueue<AppliedPatchSet>>,
+
+    /// VibeStarter Sync: shared snapshot of recent sync activity, updated as we
+    /// apply patches or hit errors.
+    sync_status: Arc<SyncStatus>,
 }
 
 impl JobThreadContext {
@@ -152,7 +224,9 @@ impl JobThreadContext {
                 };
 
                 for id in affected_ids {
-                    if let Some(patch) = compute_and_apply_changes(&mut tree, &self.vfs, id) {
+                    if let Some(patch) =
+                        compute_and_apply_changes(&mut tree, &self.vfs, id, &self.sync_status)
+                    {
                         if !patch.is_empty() {
                             applied_patches.push(patch);
                         }
@@ -166,6 +240,19 @@ impl JobThreadContext {
                 Vec::new()
             }
         };
+
+        // VibeStarter Sync: record this sync so the status endpoint can report
+        // when the project was last synced and what changed.
+        if !applied_patches.is_empty() {
+            let (mut added, mut removed, mut updated) = (0usize, 0usize, 0usize);
+            for patch in &applied_patches {
+                added += patch.added.len();
+                removed += patch.removed.len();
+                updated += patch.updated.len();
+            }
+            self.sync_status
+                .record_patch(format_patch_summary(added, removed, updated));
+        }
 
         // Notify anyone listening to the message queue about the changes we
         // just made.
@@ -262,7 +349,12 @@ impl JobThreadContext {
     }
 }
 
-fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<AppliedPatchSet> {
+fn compute_and_apply_changes(
+    tree: &mut RojoTree,
+    vfs: &Vfs,
+    id: Ref,
+    sync_status: &SyncStatus,
+) -> Option<AppliedPatchSet> {
     let metadata = tree
         .get_metadata(id)
         .expect("metadata missing for instance present in tree");
@@ -291,7 +383,9 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                 let snapshot = match snapshot_from_vfs(&metadata.context, vfs, path) {
                     Ok(snapshot) => snapshot,
                     Err(err) => {
-                        log::error!("Snapshot error: {:?}", err);
+                        let msg = format!("Snapshot error: {:?}", err);
+                        log::error!("{}", msg);
+                        sync_status.record_error(msg);
                         return None;
                     }
                 };
@@ -312,7 +406,9 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                 apply_patch_set(tree, patch_set)
             }
             Err(err) => {
-                log::error!("Error processing filesystem change: {:?}", err);
+                let msg = format!("Error processing filesystem change: {:?}", err);
+                log::error!("{}", msg);
+                sync_status.record_error(msg);
                 return None;
             }
         },
@@ -339,7 +435,9 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
             let snapshot = match snapshot_result {
                 Ok(snapshot) => snapshot,
                 Err(err) => {
-                    log::error!("{:?}", err);
+                    let msg = format!("{:?}", err);
+                    log::error!("{}", msg);
+                    sync_status.record_error(msg);
                     return None;
                 }
             };

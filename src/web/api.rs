@@ -106,6 +106,8 @@ impl ApiService {
     async fn handle_vibestarter_status(&self) -> Response<Body> {
         let root_instance_id = self.serve_session.tree().get_root_id();
         let socket_client_count = self.serve_session.socket_client_count();
+        let (last_patch_age_secs, last_patch_summary, last_error) =
+            self.serve_session.sync_status().snapshot();
 
         json_ok(&VibeStarterStatusResponse {
             server_version: SERVER_VERSION.to_owned(),
@@ -116,6 +118,9 @@ impl ApiService {
             message_cursor: self.serve_session.message_queue().cursor(),
             socket_client_count,
             studio_connected: socket_client_count > 0,
+            last_patch_age_secs,
+            last_patch_summary,
+            last_error,
         })
     }
 

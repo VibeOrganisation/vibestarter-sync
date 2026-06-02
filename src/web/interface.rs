@@ -182,6 +182,13 @@ pub struct VibeStarterStatusResponse {
     pub message_cursor: u32,
     pub socket_client_count: usize,
     pub studio_connected: bool,
+
+    /// Seconds since the last patch was applied to the tree (None if none yet).
+    pub last_patch_age_secs: Option<u64>,
+    /// Short summary of the last applied patch, e.g. "3 added · 1 updated".
+    pub last_patch_summary: Option<String>,
+    /// Last sync error encountered, cleared on the next successful patch.
+    pub last_error: Option<String>,
 }
 
 /// Response body from /api/read/{id}
