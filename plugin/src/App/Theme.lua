@@ -1,18 +1,11 @@
 --[[
 	Theming system provided through Roact's context.
-	Uses Studio colors when possible.
+
+	Imposes the VibeStarter "Soft Industrial" palette (warm dark + orange),
+	independent of the Studio theme, so the plugin matches the app. Colors are
+	mirrored from the app's design tokens (tauri-app/src/styles/tokens.css,
+	dark theme).
 ]]
-
--- Studio does not exist outside Roblox Studio, so we'll lazily initialize it
--- when possible.
-local _Studio
-local function getStudio()
-	if _Studio == nil then
-		_Studio = settings():GetService("Studio")
-	end
-
-	return _Studio
-end
 
 local ContentProvider = game:GetService("ContentProvider")
 
@@ -23,19 +16,30 @@ local Roact = require(Packages.Roact)
 
 local strict = require(script.Parent.Parent.strict)
 
-local BRAND_COLOR = Color3.fromHex("E13835")
+-- VibeStarter palette (Color3 mirrors of the app's dark-theme tokens).
+local ACCENT = Color3.fromRGB(221, 136, 56) -- orange-500, the signature accent
+local ACCENT_ON = Color3.fromRGB(20, 16, 12) -- sand-950, text on accent fills
+local BG_BASE = Color3.fromRGB(31, 26, 21) -- sand-900, main background
+local BG_RAISED = Color3.fromRGB(40, 34, 28) -- sand-800, raised surfaces/cards
+local BG_OVERLAY = Color3.fromRGB(35, 30, 24) -- sand-850, overlays/dropdowns
+local TEXT_PRIMARY = Color3.fromRGB(242, 237, 229)
+local TEXT_SECONDARY = Color3.fromRGB(188, 176, 160)
+local TEXT_MUTED = Color3.fromRGB(133, 123, 110) -- sand-500, placeholders/disabled
+local BORDER_SUBTLE = Color3.fromRGB(57, 47, 37) -- sand-700
+local BORDER_STRONG = Color3.fromRGB(84, 73, 62) -- sand-600
+local SUCCESS = Color3.fromRGB(123, 184, 122)
+local DANGER = Color3.fromRGB(210, 106, 90)
+local WARNING = Color3.fromRGB(217, 179, 107)
+local INFO = Color3.fromRGB(110, 158, 201)
 
 local Context = Roact.createContext({})
 
 local StudioProvider = Roact.Component:extend("StudioProvider")
 
--- Pull the current theme from Roblox Studio and update state with it.
+-- Build the fixed VibeStarter theme and store it in state. Same key structure
+-- as before so every component that reads `theme.X` keeps working.
 function StudioProvider:updateTheme()
-	local studioTheme = getStudio().Theme
-
-	local isDark = studioTheme.Name == "Dark"
-
-	local theme = strict(studioTheme.Name .. "Theme", {
+	local theme = strict("VibeStarterTheme", {
 		Font = {
 			Main = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal),
 			Bold = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
@@ -57,169 +61,129 @@ function StudioProvider:updateTheme()
 			Large = 18,
 			Code = 16,
 		},
-		BrandColor = BRAND_COLOR,
-		BackgroundColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainBackground),
-		TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainText),
-		SubTextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.SubText),
+		BrandColor = ACCENT,
+		BackgroundColor = BG_BASE,
+		TextColor = TEXT_PRIMARY,
+		SubTextColor = TEXT_SECONDARY,
 		Button = {
 			Solid = {
-				-- Solid uses brand theming, not Studio theming.
-				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillColor = Color3.fromRGB(255, 255, 255),
 				ActionFillTransparency = 0.8,
 				Enabled = {
-					TextColor = Color3.fromHex("FFFFFF"),
-					BackgroundColor = BRAND_COLOR,
+					TextColor = ACCENT_ON,
+					BackgroundColor = ACCENT,
 				},
 				Disabled = {
-					TextColor = Color3.fromHex("FFFFFF"),
-					BackgroundColor = BRAND_COLOR,
+					TextColor = ACCENT_ON,
+					BackgroundColor = ACCENT,
 				},
 			},
 			Bordered = {
-				ActionFillColor = studioTheme:GetColor(
-					Enum.StudioStyleGuideColor.ButtonText,
-					Enum.StudioStyleGuideModifier.Selected
-				),
+				ActionFillColor = TEXT_PRIMARY,
 				ActionFillTransparency = 0.9,
 				Enabled = {
-					TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.ButtonText),
-					BorderColor = studioTheme:GetColor(
-						Enum.StudioStyleGuideColor.CheckedFieldBorder,
-						Enum.StudioStyleGuideModifier.Disabled
-					),
+					TextColor = TEXT_PRIMARY,
+					BorderColor = BORDER_STRONG,
 				},
 				Disabled = {
-					TextColor = studioTheme:GetColor(
-						Enum.StudioStyleGuideColor.ButtonText,
-						Enum.StudioStyleGuideModifier.Disabled
-					),
-					BorderColor = studioTheme:GetColor(
-						Enum.StudioStyleGuideColor.CheckedFieldBorder,
-						Enum.StudioStyleGuideModifier.Disabled
-					),
+					TextColor = TEXT_MUTED,
+					BorderColor = BORDER_SUBTLE,
 				},
 			},
 		},
 		Checkbox = {
 			Active = {
-				-- Active checkboxes use brand theming, not Studio theming.
-				IconColor = Color3.fromHex("FFFFFF"),
-				BackgroundColor = BRAND_COLOR,
+				IconColor = ACCENT_ON,
+				BackgroundColor = ACCENT,
 			},
 			Inactive = {
-				IconColor = studioTheme:GetColor(
-					Enum.StudioStyleGuideColor.CheckedFieldIndicator,
-					Enum.StudioStyleGuideModifier.Disabled
-				),
-				BorderColor = studioTheme:GetColor(
-					Enum.StudioStyleGuideColor.CheckedFieldBorder,
-					Enum.StudioStyleGuideModifier.Disabled
-				),
+				IconColor = TEXT_MUTED,
+				BorderColor = BORDER_STRONG,
 			},
 		},
 		Dropdown = {
-			TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.ButtonText),
-			BorderColor = studioTheme:GetColor(
-				Enum.StudioStyleGuideColor.CheckedFieldBorder,
-				Enum.StudioStyleGuideModifier.Disabled
-			),
-			BackgroundColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainBackground),
-			IconColor = studioTheme:GetColor(
-				Enum.StudioStyleGuideColor.CheckedFieldIndicator,
-				Enum.StudioStyleGuideModifier.Disabled
-			),
+			TextColor = TEXT_PRIMARY,
+			BorderColor = BORDER_STRONG,
+			BackgroundColor = BG_OVERLAY,
+			IconColor = TEXT_MUTED,
 		},
 		TextInput = {
 			Enabled = {
-				TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-				PlaceholderColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.SubText),
-				BorderColor = studioTheme:GetColor(
-					Enum.StudioStyleGuideColor.CheckedFieldBorder,
-					Enum.StudioStyleGuideModifier.Disabled
-				),
+				TextColor = TEXT_PRIMARY,
+				PlaceholderColor = TEXT_MUTED,
+				BorderColor = BORDER_STRONG,
 			},
 			Disabled = {
-				TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainText),
-				PlaceholderColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.SubText),
-				BorderColor = studioTheme:GetColor(
-					Enum.StudioStyleGuideColor.CheckedFieldBorder,
-					Enum.StudioStyleGuideModifier.Disabled
-				),
+				TextColor = TEXT_SECONDARY,
+				PlaceholderColor = TEXT_MUTED,
+				BorderColor = BORDER_SUBTLE,
 			},
-			ActionFillColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+			ActionFillColor = TEXT_PRIMARY,
 			ActionFillTransparency = 0.9,
 		},
 		AddressEntry = {
-			TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			PlaceholderColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.SubText),
+			TextColor = TEXT_PRIMARY,
+			PlaceholderColor = TEXT_MUTED,
 		},
 		BorderedContainer = {
-			BorderColor = studioTheme:GetColor(
-				Enum.StudioStyleGuideColor.CheckedFieldBorder,
-				Enum.StudioStyleGuideModifier.Disabled
-			),
-			BackgroundColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.InputFieldBackground),
+			BorderColor = BORDER_SUBTLE,
+			BackgroundColor = BG_RAISED,
 		},
 		Spinner = {
-			ForegroundColor = BRAND_COLOR,
-			BackgroundColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.InputFieldBackground),
+			ForegroundColor = ACCENT,
+			BackgroundColor = BORDER_SUBTLE,
 		},
 		Diff = {
-			-- Very bright different colors in case some places were not updated to use
-			-- the new background diff colors.
+			-- Bright fallbacks in case a row isn't updated to the background colors.
 			Add = Color3.fromRGB(255, 0, 255),
 			Remove = Color3.fromRGB(255, 0, 255),
 			Edit = Color3.fromRGB(255, 0, 255),
 
-			Row = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			Warning = studioTheme:GetColor(Enum.StudioStyleGuideColor.WarningText),
+			Row = TEXT_PRIMARY,
+			Warning = WARNING,
 
 			Background = {
-				-- Studio doesn't have good colors since their diffs use backgrounds, not text
-				Add = if isDark then Color3.fromRGB(143, 227, 154) else Color3.fromRGB(41, 164, 45),
-				Remove = if isDark then Color3.fromRGB(242, 125, 125) else Color3.fromRGB(150, 29, 29),
-				Edit = if isDark then Color3.fromRGB(120, 154, 248) else Color3.fromRGB(0, 70, 160),
-				Remain = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+				Add = SUCCESS,
+				Remove = DANGER,
+				Edit = INFO,
+				Remain = TEXT_SECONDARY,
 			},
 
 			Text = {
-				Add = if isDark then Color3.new(0, 0, 0) else Color3.new(1, 1, 1),
-				Remove = if isDark then Color3.new(0, 0, 0) else Color3.new(1, 1, 1),
-				Edit = if isDark then Color3.new(0, 0, 0) else Color3.new(1, 1, 1),
-				Remain = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainText),
+				Add = ACCENT_ON,
+				Remove = ACCENT_ON,
+				Edit = ACCENT_ON,
+				Remain = TEXT_PRIMARY,
 			},
 		},
 		ConnectionDetails = {
-			ProjectNameColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			AddressColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			DisconnectColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+			ProjectNameColor = TEXT_PRIMARY,
+			AddressColor = TEXT_SECONDARY,
+			DisconnectColor = TEXT_PRIMARY,
 		},
 		Settings = {
-			DividerColor = studioTheme:GetColor(
-				Enum.StudioStyleGuideColor.CheckedFieldBorder,
-				Enum.StudioStyleGuideModifier.Disabled
-			),
+			DividerColor = BORDER_SUBTLE,
 			Navbar = {
-				BackButtonColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-				TextColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+				BackButtonColor = TEXT_PRIMARY,
+				TextColor = TEXT_PRIMARY,
 			},
 			Setting = {
-				NameColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-				DescriptionColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainText),
-				UnstableColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.WarningText),
-				DebugColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.InfoText),
+				NameColor = TEXT_PRIMARY,
+				DescriptionColor = TEXT_SECONDARY,
+				UnstableColor = WARNING,
+				DebugColor = INFO,
 			},
 		},
 		Header = {
-			LogoColor = BRAND_COLOR,
-			VersionColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.MainText),
+			LogoColor = ACCENT,
+			VersionColor = TEXT_MUTED,
 		},
 		Notification = {
-			InfoColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			CloseColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+			InfoColor = TEXT_PRIMARY,
+			CloseColor = TEXT_SECONDARY,
 		},
-		ErrorColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-		ScrollBarColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
+		ErrorColor = TEXT_PRIMARY,
+		ScrollBarColor = BORDER_STRONG,
 	})
 
 	self:setState({
@@ -242,16 +206,6 @@ function StudioProvider:render()
 	return Roact.createElement(Context.Provider, {
 		value = self.state.theme,
 	}, self.props[Roact.Children])
-end
-
-function StudioProvider:didMount()
-	self.connection = getStudio().ThemeChanged:Connect(function()
-		self:updateTheme()
-	end)
-end
-
-function StudioProvider:willUnmount()
-	self.connection:Disconnect()
 end
 
 local function with(callback)

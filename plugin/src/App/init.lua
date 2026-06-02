@@ -12,7 +12,6 @@ local Log = require(Packages.Log)
 local Promise = require(Packages.Promise)
 
 local Assets = require(Plugin.Assets)
-local Version = require(Plugin.Version)
 local Config = require(Plugin.Config)
 local Settings = require(Plugin.Settings)
 local strict = require(Plugin.strict)
@@ -39,7 +38,6 @@ local StatusPages = require(script.StatusPages)
 
 local AppStatus = strict("AppStatus", {
 	NotConnected = "NotConnected",
-	Settings = "Settings",
 	Connecting = "Connecting",
 	Confirming = "Confirming",
 	Connected = "Connected",
@@ -117,13 +115,6 @@ function App:init()
 		end)
 	end)
 
-	self.disconnectUpdatesCheckChanged = Settings:onChanged("checkForUpdates", function()
-		self:checkForUpdates()
-	end)
-	self.disconnectPrereleasesCheckChanged = Settings:onChanged("checkForPrereleases", function()
-		self:checkForUpdates()
-	end)
-
 	self:setState({
 		appStatus = AppStatus.NotConnected,
 		guiEnabled = false,
@@ -138,8 +129,6 @@ function App:init()
 	})
 
 	if RunService:IsEdit() then
-		self:checkForUpdates()
-
 		self:startSyncReminderPolling()
 		self.disconnectSyncReminderPollingChanged = Settings:onChanged("syncReminderPolling", function(enabled)
 			if enabled then
@@ -179,8 +168,6 @@ function App:willUnmount()
 	self.waypointConnection:Disconnect()
 	self.confirmationBindable:Destroy()
 
-	self.disconnectUpdatesCheckChanged()
-	self.disconnectPrereleasesCheckChanged()
 	if self.disconnectSyncReminderPollingChanged then
 		self.disconnectSyncReminderPollingChanged()
 	end
@@ -235,24 +222,6 @@ function App:closeNotification(id: number)
 			notifications = notifications,
 		}
 	end)
-end
-
-function App:checkForUpdates()
-	local updateMessage = Version.getUpdateMessage()
-
-	if updateMessage then
-		self:addNotification({
-			text = updateMessage,
-			timeout = 500,
-			actions = {
-				Dismiss = {
-					text = "Dismiss",
-					style = "Bordered",
-					layoutOrder = 2,
-				},
-			},
-		})
-	end
 end
 
 function App:getPriorSyncInfo(): { host: string?, port: string?, projectName: string?, timestamp: number? }
@@ -819,7 +788,7 @@ function App:endSession()
 end
 
 function App:render()
-	local pluginName = "VibeStarter Sync " .. Version.display(Config.version)
+	local pluginName = "VibeStarter Sync"
 
 	local function createPageElement(appStatus, additionalProps)
 		additionalProps = additionalProps or {}
@@ -873,13 +842,6 @@ function App:render()
 						onConnect = function()
 							self:startSession()
 						end,
-
-						onNavigateSettings = function()
-							self.backPage = AppStatus.NotConnected
-							self:setState({
-								appStatus = AppStatus.Settings,
-							})
-						end,
 					}),
 
 					ConfirmingPage = createPageElement(AppStatus.Confirming, {
@@ -911,24 +873,6 @@ function App:render()
 
 						onDisconnect = function()
 							self:endSession()
-						end,
-
-						onNavigateSettings = function()
-							self.backPage = AppStatus.Connected
-							self:setState({
-								appStatus = AppStatus.Settings,
-							})
-						end,
-					}),
-
-					Settings = createPageElement(AppStatus.Settings, {
-						syncActive = self.serveSession ~= nil
-							and self.serveSession:getStatus() == ServeSession.Status.Connected,
-
-						onBack = function()
-							self:setState({
-								appStatus = self.backPage or AppStatus.NotConnected,
-							})
 						end,
 					}),
 

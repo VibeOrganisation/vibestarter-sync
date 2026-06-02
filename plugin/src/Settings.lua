@@ -12,7 +12,9 @@ local Roact = require(Packages.Roact)
 local defaultSettings = {
 	openScriptsExternally = false,
 	twoWaySync = false,
-	autoReconnect = false,
+	-- VibeStarter Sync: the plugin has no settings UI, so default to
+	-- reconnecting automatically — the app drives the connection.
+	autoReconnect = true,
 	showNotifications = true,
 	enableSyncFallback = true,
 	syncReminderMode = "Notify" :: "None" | "Notify" | "Fullscreen",

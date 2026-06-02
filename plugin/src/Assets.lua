@@ -16,10 +16,12 @@ local Assets = {
 		},
 	},
 	Images = {
-		Logo = "rbxassetid://5990772764",
-		PluginButton = "rbxassetid://3405341609",
-		PluginButtonConnected = "rbxassetid://9529783993",
-		PluginButtonWarning = "rbxassetid://9529784530",
+		-- VibeStarter Sync logo (used for the panel header and the toolbar button,
+		-- same asset across states so the toolbar reads as VibeStarter, not Rojo).
+		Logo = "rbxassetid://122593669410131",
+		PluginButton = "rbxassetid://122593669410131",
+		PluginButtonConnected = "rbxassetid://122593669410131",
+		PluginButtonWarning = "rbxassetid://122593669410131",
 		Icons = {
 			Close = "rbxassetid://6012985953",
 			Back = "rbxassetid://6017213752",

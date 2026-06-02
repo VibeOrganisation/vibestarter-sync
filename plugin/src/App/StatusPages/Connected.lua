@@ -448,18 +448,6 @@ function ConnectedPage:render()
 				BackgroundTransparency = 1,
 				ZIndex = 2,
 			}, {
-				Settings = e(TextButton, {
-					text = "Settings",
-					style = "Bordered",
-					transparency = self.props.transparency,
-					layoutOrder = 1,
-					onClick = self.props.onNavigateSettings,
-				}, {
-					Tip = e(Tooltip.Trigger, {
-						text = "View and modify plugin settings",
-					}),
-				}),
-
 				Disconnect = e(TextButton, {
 					text = "Disconnect",
 					style = "Solid",
