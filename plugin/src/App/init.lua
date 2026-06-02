@@ -63,7 +63,7 @@ function App:init()
 	self.notifId = 0
 
 	self.waypointConnection = ChangeHistoryService.OnUndo:Connect(function(action: string)
-		if not string.find(action, "^Rojo: Patch") then
+		if not string.find(action, "^VibeStarter Sync: Patch") then
 			return
 		end
 
@@ -819,7 +819,7 @@ function App:endSession()
 end
 
 function App:render()
-	local pluginName = "Rojo " .. Version.display(Config.version)
+	local pluginName = "VibeStarter Sync " .. Version.display(Config.version)
 
 	local function createPageElement(appStatus, additionalProps)
 		additionalProps = additionalProps or {}
@@ -961,8 +961,8 @@ function App:render()
 
 			toggleAction = e(StudioPluginAction, {
 				name = "RojoConnection",
-				title = "Rojo: Connect/Disconnect",
-				description = "Toggles the server for a Rojo sync session",
+				title = "VibeStarter Sync: Connect/Disconnect",
+				description = "Toggles the server for a VibeStarter Sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -978,8 +978,8 @@ function App:render()
 
 			connectAction = e(StudioPluginAction, {
 				name = "RojoConnect",
-				title = "Rojo: Connect",
-				description = "Connects the server for a Rojo sync session",
+				title = "VibeStarter Sync: Connect",
+				description = "Connects the server for a VibeStarter Sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -991,8 +991,8 @@ function App:render()
 
 			disconnectAction = e(StudioPluginAction, {
 				name = "RojoDisconnect",
-				title = "Rojo: Disconnect",
-				description = "Disconnects the server for a Rojo sync session",
+				title = "VibeStarter Sync: Disconnect",
+				description = "Disconnects the server for a VibeStarter Sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -1006,8 +1006,8 @@ function App:render()
 				name = pluginName,
 			}, {
 				button = e(StudioToggleButton, {
-					name = "Rojo",
-					tooltip = "Show or hide the Rojo panel",
+					name = "VibeStarter Sync",
+					tooltip = "Show or hide the VibeStarter Sync panel",
 					icon = self.state.toolbarIcon,
 					active = self.state.guiEnabled,
 					enabled = true,
