@@ -4,111 +4,26 @@ local Packages = Rojo.Packages
 
 local Roact = require(Packages.Roact)
 
-local Config = require(Plugin.Config)
-
-local Theme = require(Plugin.App.Theme)
-local BorderedContainer = require(Plugin.App.Components.BorderedContainer)
 local TextButton = require(Plugin.App.Components.TextButton)
 local Header = require(Plugin.App.Components.Header)
 local Tooltip = require(Plugin.App.Components.Tooltip)
 
-local PORT_WIDTH = 74
-local DIVIDER_WIDTH = 1
-local HOST_OFFSET = 12
-
 local e = Roact.createElement
-
-local function AddressEntry(props)
-	return Theme.with(function(theme)
-		return e(BorderedContainer, {
-			transparency = props.transparency,
-			size = UDim2.new(1, 0, 0, 36),
-			layoutOrder = props.layoutOrder,
-		}, {
-			Host = e("TextBox", {
-				Text = props.host or "",
-				FontFace = theme.Font.Code,
-				TextSize = theme.TextSize.Large,
-				TextColor3 = theme.AddressEntry.TextColor,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTransparency = props.transparency,
-				PlaceholderText = Config.defaultHost,
-				PlaceholderColor3 = theme.AddressEntry.PlaceholderColor,
-				ClearTextOnFocus = false,
-
-				Size = UDim2.new(1, -(HOST_OFFSET + DIVIDER_WIDTH + PORT_WIDTH), 1, 0),
-				Position = UDim2.new(0, HOST_OFFSET, 0, 0),
-
-				ClipsDescendants = true,
-				BackgroundTransparency = 1,
-
-				[Roact.Change.Text] = function(object)
-					if props.onHostChange ~= nil then
-						props.onHostChange(object.Text)
-					end
-				end,
-			}),
-
-			Port = e("TextBox", {
-				Text = props.port or "",
-				FontFace = theme.Font.Code,
-				TextSize = theme.TextSize.Large,
-				TextColor3 = theme.AddressEntry.TextColor,
-				TextTransparency = props.transparency,
-				PlaceholderText = Config.defaultPort,
-				PlaceholderColor3 = theme.AddressEntry.PlaceholderColor,
-				ClearTextOnFocus = false,
-
-				Size = UDim2.new(0, PORT_WIDTH, 1, 0),
-				Position = UDim2.new(1, 0, 0, 0),
-				AnchorPoint = Vector2.new(1, 0),
-
-				ClipsDescendants = true,
-				BackgroundTransparency = 1,
-
-				[Roact.Change.Text] = function(object)
-					local text = object.Text
-					text = text:gsub("%D", "")
-					object.Text = text
-
-					if props.onPortChange ~= nil then
-						props.onPortChange(text)
-					end
-				end,
-			}, {
-				Divider = e("Frame", {
-					BackgroundColor3 = theme.BorderedContainer.BorderColor,
-					BackgroundTransparency = props.transparency,
-					Size = UDim2.new(0, DIVIDER_WIDTH, 1, 0),
-					AnchorPoint = Vector2.new(1, 0),
-					BorderSizePixel = 0,
-				}),
-			}),
-		})
-	end)
-end
 
 local NotConnectedPage = Roact.Component:extend("NotConnectedPage")
 
 function NotConnectedPage:render()
+	-- No address entry: VibeStarter always serves on localhost:34872, so the
+	-- host/port are fixed (Config defaults) and not user-editable.
 	return Roact.createFragment({
 		Header = e(Header, {
 			transparency = self.props.transparency,
 			layoutOrder = 1,
 		}),
 
-		AddressEntry = e(AddressEntry, {
-			host = self.props.host,
-			port = self.props.port,
-			onHostChange = self.props.onHostChange,
-			onPortChange = self.props.onPortChange,
-			transparency = self.props.transparency,
-			layoutOrder = 2,
-		}),
-
 		Buttons = e("Frame", {
 			Size = UDim2.new(1, 0, 0, 34),
-			LayoutOrder = 3,
+			LayoutOrder = 2,
 			BackgroundTransparency = 1,
 			ZIndex = 2,
 		}, {
@@ -116,11 +31,11 @@ function NotConnectedPage:render()
 				text = "Connect",
 				style = "Solid",
 				transparency = self.props.transparency,
-				layoutOrder = 2,
+				layoutOrder = 1,
 				onClick = self.props.onConnect,
 			}, {
 				Tip = e(Tooltip.Trigger, {
-					text = "Connect to a VibeStarter Sync server",
+					text = "Connect to the VibeStarter Sync server",
 				}),
 			}),
 

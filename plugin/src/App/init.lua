@@ -834,11 +834,6 @@ function App:render()
 					Tooltips = e(Tooltip.Container, nil),
 
 					NotConnectedPage = createPageElement(AppStatus.NotConnected, {
-						host = self.host,
-						onHostChange = self.setHost,
-						port = self.port,
-						onPortChange = self.setPort,
-
 						onConnect = function()
 							self:startSession()
 						end,
