@@ -9,6 +9,7 @@ local Theme = require(Plugin.App.Theme)
 local BrandBadge = require(Plugin.App.Components.BrandBadge)
 local TextButton = require(Plugin.App.Components.TextButton)
 local Tooltip = require(Plugin.App.Components.Tooltip)
+local VersionTag = require(Plugin.App.Components.VersionTag)
 
 local e = Roact.createElement
 
@@ -98,6 +99,12 @@ function NotConnectedPage:render()
 						text = "Connect to the VibeStarter Sync server",
 					}),
 				}),
+			}),
+
+			Version = e(VersionTag, {
+				transparency = transparency,
+				position = UDim2.new(0.5, 0, 1, -8),
+				anchorPoint = Vector2.new(0.5, 1),
 			}),
 
 			Padding = e("UIPadding", {
