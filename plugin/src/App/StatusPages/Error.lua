@@ -5,10 +5,10 @@ local Packages = Rojo.Packages
 local Roact = require(Packages.Roact)
 
 local Theme = require(Plugin.App.Theme)
+local Assets = require(Plugin.Assets)
 local getTextBoundsAsync = require(Plugin.App.getTextBoundsAsync)
 
 local TextButton = require(Plugin.App.Components.TextButton)
-local Header = require(Plugin.App.Components.Header)
 local BorderedContainer = require(Plugin.App.Components.BorderedContainer)
 local ScrollingFrame = require(Plugin.App.Components.ScrollingFrame)
 local Tooltip = require(Plugin.App.Components.Tooltip)
@@ -32,7 +32,8 @@ function Error:render()
 			}):map(function(values)
 				local maximumSize = values.containerSize
 				maximumSize -= Vector2.new(14, 14) * 2 -- Page padding
-				maximumSize -= Vector2.new(0, 34 + 10) -- Buttons and spacing
+				maximumSize -= Vector2.new(0, 40 + 10) -- Button and spacing
+				maximumSize -= Vector2.new(0, 28 + 10) -- Heading and spacing
 
 				local outerSize = values.contentSize + ERROR_PADDING * 2
 
@@ -102,64 +103,91 @@ function ErrorPage:init()
 end
 
 function ErrorPage:render()
-	return Roact.createElement("Frame", {
-		Size = UDim2.new(1, 0, 1, 0),
-		BackgroundTransparency = 1,
-
-		[Roact.Change.AbsoluteSize] = function(object)
-			self.setContainerSize(object.AbsoluteSize)
-		end,
-	}, {
-		Header = e(Header, {
-			transparency = self.props.transparency,
-			layoutOrder = 1,
-		}),
-
-		Error = e(Error, {
-			errorMessage = self.state.errorMessage,
-			containerSize = self.containerSize,
-			transparency = self.props.transparency,
-			layoutOrder = 2,
-		}),
-
-		Buttons = e("Frame", {
-			Size = UDim2.new(1, 0, 0, 35),
-			LayoutOrder = 3,
+	return Theme.with(function(theme)
+		return e("Frame", {
+			Size = UDim2.new(1, 0, 1, 0),
 			BackgroundTransparency = 1,
+
+			[Roact.Change.AbsoluteSize] = function(object)
+				self.setContainerSize(object.AbsoluteSize)
+			end,
 		}, {
-			Close = e(TextButton, {
-				text = "Okay",
-				style = "Bordered",
-				transparency = self.props.transparency,
-				layoutOrder = 1,
-				onClick = self.props.onClose,
+			Heading = e("Frame", {
+				Size = UDim2.new(1, 0, 0, 28),
+				BackgroundTransparency = 1,
+				LayoutOrder = 1,
 			}, {
-				Tip = e(Tooltip.Trigger, {
-					text = "Dismiss message",
+				Layout = e("UIListLayout", {
+					VerticalAlignment = Enum.VerticalAlignment.Center,
+					FillDirection = Enum.FillDirection.Horizontal,
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					Padding = UDim.new(0, 8),
+				}),
+
+				Icon = e("ImageLabel", {
+					Image = Assets.Images.Icons.Warning,
+					ImageColor3 = theme.WarningColor,
+					ImageTransparency = self.props.transparency,
+					Size = UDim2.new(0, 24, 0, 24),
+					BackgroundTransparency = 1,
+					LayoutOrder = 1,
+				}),
+
+				Title = e("TextLabel", {
+					Text = "Connection error",
+					FontFace = theme.Font.Bold,
+					TextSize = theme.TextSize.Large,
+					TextColor3 = theme.TextColor,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTransparency = self.props.transparency,
+					Size = UDim2.new(1, -32, 1, 0),
+					BackgroundTransparency = 1,
+					LayoutOrder = 2,
+				}),
+			}),
+
+			Error = e(Error, {
+				errorMessage = self.state.errorMessage,
+				containerSize = self.containerSize,
+				transparency = self.props.transparency,
+				layoutOrder = 2,
+			}),
+
+			Buttons = e("Frame", {
+				Size = UDim2.new(1, 0, 0, 40),
+				LayoutOrder = 3,
+				BackgroundTransparency = 1,
+			}, {
+				Close = e(TextButton, {
+					text = "Okay",
+					style = "Bordered",
+					fillWidth = true,
+					height = 40,
+					transparency = self.props.transparency,
+					layoutOrder = 1,
+					onClick = self.props.onClose,
+				}, {
+					Tip = e(Tooltip.Trigger, {
+						text = "Dismiss message",
+					}),
 				}),
 			}),
 
 			Layout = e("UIListLayout", {
-				HorizontalAlignment = Enum.HorizontalAlignment.Right,
-				FillDirection = Enum.FillDirection.Horizontal,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 10),
 			}),
-		}),
 
-		Layout = e("UIListLayout", {
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			FillDirection = Enum.FillDirection.Vertical,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, 10),
-		}),
-
-		Padding = e("UIPadding", {
-			PaddingLeft = UDim.new(0, 14),
-			PaddingRight = UDim.new(0, 14),
-			PaddingTop = UDim.new(0, 14),
-			PaddingBottom = UDim.new(0, 14),
-		}),
-	})
+			Padding = e("UIPadding", {
+				PaddingLeft = UDim.new(0, 14),
+				PaddingRight = UDim.new(0, 14),
+				PaddingTop = UDim.new(0, 14),
+				PaddingBottom = UDim.new(0, 14),
+			}),
+		})
+	end)
 end
 
 function ErrorPage.getDerivedStateFromProps(props)

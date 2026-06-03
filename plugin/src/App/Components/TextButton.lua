@@ -49,8 +49,12 @@ function TextButton:render()
 		local bindingHover = bindingUtil.deriveProperty(self.binding, "hover")
 		local bindingEnabled = bindingUtil.deriveProperty(self.binding, "enabled")
 
+		local height = self.props.height or 34
+
 		return e("ImageButton", {
-			Size = UDim2.new(0, (theme.TextSize.Body * 2) + textBounds.X, 0, 34),
+			Size = if self.props.fillWidth
+				then UDim2.new(1, 0, 0, height)
+				else UDim2.new(0, (theme.TextSize.Body * 2) + textBounds.X, 0, height),
 			Position = self.props.position,
 			AnchorPoint = self.props.anchorPoint,
 

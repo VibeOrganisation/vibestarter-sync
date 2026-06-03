@@ -215,18 +215,45 @@ local function ConnectionDetails(props)
 				Size = UDim2.new(1, 0, 1, 0),
 				BackgroundTransparency = 1,
 			}, {
-				ProjectName = e("TextLabel", {
-					Text = props.projectName,
-					FontFace = theme.Font.Bold,
-					TextSize = theme.TextSize.Large,
-					TextColor3 = theme.ConnectionDetails.ProjectNameColor,
-					TextTransparency = props.transparency,
-					TextXAlignment = Enum.TextXAlignment.Left,
-
+				NameRow = e("Frame", {
 					Size = UDim2.new(1, 0, 0, theme.TextSize.Large),
-
-					LayoutOrder = 1,
 					BackgroundTransparency = 1,
+					LayoutOrder = 1,
+				}, {
+					Layout = e("UIListLayout", {
+						VerticalAlignment = Enum.VerticalAlignment.Center,
+						FillDirection = Enum.FillDirection.Horizontal,
+						SortOrder = Enum.SortOrder.LayoutOrder,
+						Padding = UDim.new(0, 8),
+					}),
+
+					-- Green dot: the live "connected" signal next to the project name.
+					Dot = e("Frame", {
+						Size = UDim2.new(0, 8, 0, 8),
+						BackgroundColor3 = theme.SuccessColor,
+						BackgroundTransparency = props.transparency,
+						BorderSizePixel = 0,
+						LayoutOrder = 1,
+					}, {
+						Corner = e("UICorner", {
+							CornerRadius = UDim.new(1, 0),
+						}),
+					}),
+
+					ProjectName = e("TextLabel", {
+						Text = props.projectName,
+						FontFace = theme.Font.Bold,
+						TextSize = theme.TextSize.Large,
+						TextColor3 = theme.ConnectionDetails.ProjectNameColor,
+						TextTransparency = props.transparency,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextTruncate = Enum.TextTruncate.AtEnd,
+
+						Size = UDim2.new(1, -16, 1, 0),
+
+						LayoutOrder = 2,
+						BackgroundTransparency = 1,
+					}),
 				}),
 
 				Address = e("TextLabel", {
@@ -443,28 +470,23 @@ function ConnectedPage:render()
 			}),
 
 			Buttons = e("Frame", {
-				Size = UDim2.new(1, 0, 0, 34),
+				Size = UDim2.new(1, 0, 0, 40),
 				LayoutOrder = 3,
 				BackgroundTransparency = 1,
 				ZIndex = 2,
 			}, {
 				Disconnect = e(TextButton, {
 					text = "Disconnect",
-					style = "Solid",
+					style = "Bordered",
+					fillWidth = true,
+					height = 40,
 					transparency = self.props.transparency,
-					layoutOrder = 2,
+					layoutOrder = 1,
 					onClick = self.props.onDisconnect,
 				}, {
 					Tip = e(Tooltip.Trigger, {
 						text = "Disconnect from the VibeStarter Sync server",
 					}),
-				}),
-
-				Layout = e("UIListLayout", {
-					HorizontalAlignment = Enum.HorizontalAlignment.Right,
-					FillDirection = Enum.FillDirection.Horizontal,
-					SortOrder = Enum.SortOrder.LayoutOrder,
-					Padding = UDim.new(0, 10),
 				}),
 			}),
 

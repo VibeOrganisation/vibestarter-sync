@@ -184,6 +184,8 @@ function StudioProvider:updateTheme()
 		},
 		ErrorColor = TEXT_PRIMARY,
 		ScrollBarColor = BORDER_STRONG,
+		SuccessColor = SUCCESS,
+		WarningColor = WARNING,
 	})
 
 	self:setState({
