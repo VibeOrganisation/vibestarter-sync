@@ -138,10 +138,18 @@ function App:init()
 			end
 		end)
 
-		self:tryAutoReconnect():andThen(function(didReconnect)
-			if not didReconnect then
-				self:checkSyncReminder()
+		-- Prefer marker auto-connect: it proves the open place is this project
+		-- and connects without a confirmation prompt. Fall back to the prior
+		-- projectName-based reconnect, then to the sync reminder.
+		self:tryAutoConnectByMarker():andThen(function(didConnect)
+			if didConnect then
+				return nil
 			end
+			return self:tryAutoReconnect():andThen(function(didReconnect)
+				if not didReconnect then
+					self:checkSyncReminder()
+				end
+			end)
 		end)
 	end
 
@@ -388,27 +396,72 @@ function App:tryAutoReconnect()
 		end)
 end
 
-function App:checkSyncReminder()
-	local syncReminderMode = Settings:get("syncReminderMode")
-	if syncReminderMode == "None" then
-		return
+-- The VibeStarter app stamps the bound project's UUID into the `Id` attribute
+-- of `ServerStorage.VibeStarter`. Returns it, or nil when the place has no
+-- marker (never linked, or a blank/foreign place).
+function App:getPlaceMarkerId(): string?
+	local marker = ServerStorage:FindFirstChild("VibeStarter")
+	local id = marker and marker:GetAttribute("Id")
+	return if type(id) == "string" and id ~= "" then id else nil
+end
+
+-- Auto-connect when the open place is provably this project: the place marker's
+-- Id matches the UUID the active sync server advertises for the project it
+-- serves (`vibestarterProjectId`). Identity is proven, so we connect without the
+-- manual "Connect" click and without a confirmation prompt (see startSession).
+-- Resolves to true when a session was started, false otherwise.
+function App:tryAutoConnectByMarker()
+	local markerId = self:getPlaceMarkerId()
+	if not markerId then
+		Log.trace("No VibeStarter place marker, skipping marker auto-connect")
+		return Promise.resolve(false)
 	end
 
+	return self:findActiveServer()
+		:andThen(function(serverInfo)
+			if serverInfo.vibestarterProjectId == markerId then
+				Log.trace("Place marker matches served project, auto-connecting")
+				self:startSession(true)
+				return true
+			end
+			Log.trace("Place marker does not match served project, not auto-connecting")
+			return false
+		end)
+		:catch(function()
+			Log.trace("Marker auto-connect found no active server")
+			return false
+		end)
+end
+
+function App:checkSyncReminder()
 	if self.serveSession ~= nil or not self:isSyncLockAvailable() then
 		-- Already syncing or cannot sync, no reason to remind
 		return
 	end
 
+	local syncReminderMode = Settings:get("syncReminderMode")
 	local priorSyncInfo = self:getPriorSyncInfo()
 
 	self:findActiveServer()
 		:andThen(function(serverInfo, host, port)
-			self:sendSyncReminder(
-				`Project '{serverInfo.projectName}' is serving at {host}:{port}.\nWould you like to connect?`
-			)
+			-- A server is up. If the open place is provably this project, connect
+			-- automatically with no prompt instead of reminding. This is what
+			-- covers opening a linked place after Studio is already running (the
+			-- plugin does not re-init on place change, but this polls every 30s).
+			if serverInfo.vibestarterProjectId ~= nil and serverInfo.vibestarterProjectId == self:getPlaceMarkerId() then
+				Log.trace("Place marker matches served project, auto-connecting")
+				self:startSession(true)
+				return
+			end
+
+			if syncReminderMode ~= "None" then
+				self:sendSyncReminder(
+					`Project '{serverInfo.projectName}' is serving at {host}:{port}.\nWould you like to connect?`
+				)
+			end
 		end)
 		:catch(function()
-			if priorSyncInfo.timestamp and priorSyncInfo.projectName then
+			if syncReminderMode ~= "None" and priorSyncInfo.timestamp and priorSyncInfo.projectName then
 				-- We didn't find an active server,
 				-- but this place has a prior sync
 				-- so we should remind the user to serve
@@ -535,7 +588,12 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
-function App:startSession()
+function App:startSession(trustedIdentity: boolean?)
+	-- When true, the open place's identity has been proven (its marker matches
+	-- the served project), so the initial-sync confirmation prompt is skipped.
+	-- Set on every call so a later manual connect re-enables confirmation.
+	self.sessionTrustedIdentity = trustedIdentity == true
+
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
@@ -682,6 +740,13 @@ function App:startSession()
 		-- Play solo auto-connect does not require confirmation
 		if self:isAutoConnectPlaytestServerAvailable() then
 			Log.trace("Accepting patch without confirmation because play solo auto-connect is enabled")
+			return "Accept"
+		end
+
+		-- Marker auto-connect already proved this place is the served project,
+		-- so there is no risk of clobbering an unrelated place: skip the prompt.
+		if self.sessionTrustedIdentity then
+			Log.trace("Accepting patch without confirmation because the place identity is proven (marker match)")
 			return "Accept"
 		end
 

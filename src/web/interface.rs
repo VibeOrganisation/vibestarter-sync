@@ -165,6 +165,12 @@ pub struct ServerInfoResponse {
     pub game_id: Option<u64>,
     pub place_id: Option<u64>,
     pub root_instance_id: Ref,
+    /// VibeStarter Sync: the UUID committed in the served project's
+    /// `vibestarter.json`. The plugin compares it against the
+    /// `ServerStorage.VibeStarter` place marker to auto-connect only when the
+    /// open place is provably this project. `None` when the project has no
+    /// `vibestarter.json` (plain Rojo project) — auto-connect stays disabled.
+    pub vibestarter_project_id: Option<String>,
 }
 
 /// Response body from /api/vibestarter/status — VibeStarter Sync extension.

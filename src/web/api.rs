@@ -97,7 +97,22 @@ impl ApiService {
             place_id: self.serve_session.place_id(),
             game_id: self.serve_session.game_id(),
             root_instance_id,
+            vibestarter_project_id: self.vibestarter_project_id(),
         })
+    }
+
+    /// VibeStarter Sync: read the `id` field of the served project's
+    /// `vibestarter.json` (the committed source-of-truth UUID). Best-effort —
+    /// any missing file / parse error yields `None`, which simply leaves
+    /// marker auto-connect disabled (the user can still connect manually).
+    fn vibestarter_project_id(&self) -> Option<String> {
+        let path = self.serve_session.root_dir().join("vibestarter.json");
+        let text = fs::read_to_string(path).ok()?;
+        serde_json::from_str::<serde_json::Value>(&text)
+            .ok()?
+            .get("id")?
+            .as_str()
+            .map(str::to_owned)
     }
 
     /// VibeStarter Sync extension: structured session/connection state for the
