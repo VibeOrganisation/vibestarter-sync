@@ -7,7 +7,6 @@ use fs_err as fs;
 use fs_err::File;
 use maplit::hashmap;
 use memofs::VfsSnapshot;
-use semver::Version;
 
 fn snapshot_from_fs_path(path: &Path) -> io::Result<VfsSnapshot> {
     println!("cargo:rerun-if-changed={}", path.display());
@@ -49,14 +48,10 @@ fn main() -> Result<(), anyhow::Error> {
     let plugin_dir = root_dir.join("plugin");
     let templates_dir = root_dir.join("assets").join("project-templates");
 
-    let our_version = Version::parse(env::var_os("CARGO_PKG_VERSION").unwrap().to_str().unwrap())?;
-    let plugin_version =
-        Version::parse(fs::read_to_string(plugin_dir.join("Version.txt"))?.trim())?;
-
-    assert_eq!(
-        our_version, plugin_version,
-        "plugin version does not match Cargo version"
-    );
+    // The VibeStarter Sync plugin (plugin/Version.txt) and the rojo CLI
+    // (Cargo.toml) version independently since the rebrand, so we no longer
+    // assert they match. The protocol version (web::interface::PROTOCOL_VERSION)
+    // is the real client/server compatibility gate.
 
     let template_snapshot = snapshot_from_fs_path(&templates_dir)?;
 
