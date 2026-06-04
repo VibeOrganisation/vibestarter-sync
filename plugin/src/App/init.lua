@@ -46,6 +46,8 @@ local AppStatus = strict("AppStatus", {
 
 local e = Roact.createElement
 
+local MARKER_AUTO_CONNECT_POLL_SECONDS = 2
+
 local App = Roact.Component:extend("App")
 
 function App:init()
@@ -59,6 +61,11 @@ function App:init()
 	self.confirmationEvent = self.confirmationBindable.Event
 	self.knownProjects = {}
 	self.notifId = 0
+	self.markerAutoConnectInFlight = false
+	self.markerAutoConnectPromise = nil
+	self.markerAutoConnectPollingThread = nil
+	self.markerAutoConnectStorageConnection = nil
+	self.markerAutoConnectMarkerConnection = nil
 
 	self.waypointConnection = ChangeHistoryService.OnUndo:Connect(function(action: string)
 		if not string.find(action, "^VibeStarter Sync: Patch") then
@@ -129,6 +136,8 @@ function App:init()
 	})
 
 	if RunService:IsEdit() then
+		self:startMarkerAutoConnectPolling()
+		self:watchMarkerAutoConnect()
 		self:startSyncReminderPolling()
 		self.disconnectSyncReminderPollingChanged = Settings:onChanged("syncReminderPolling", function(enabled)
 			if enabled then
@@ -141,7 +150,7 @@ function App:init()
 		-- Prefer marker auto-connect: it proves the open place is this project
 		-- and connects without a confirmation prompt. Fall back to the prior
 		-- projectName-based reconnect, then to the sync reminder.
-		self:tryAutoConnectByMarker():andThen(function(didConnect)
+		self:requestMarkerAutoConnect("initial"):andThen(function(didConnect)
 			if didConnect then
 				return nil
 			end
@@ -180,6 +189,7 @@ function App:willUnmount()
 		self.disconnectSyncReminderPollingChanged()
 	end
 
+	self:stopMarkerAutoConnect()
 	self:stopSyncReminderPolling()
 
 	self.autoConnectPlaytestServerListener()
@@ -411,6 +421,10 @@ end
 -- manual "Connect" click and without a confirmation prompt (see startSession).
 -- Resolves to true when a session was started, false otherwise.
 function App:tryAutoConnectByMarker()
+	if self.serveSession ~= nil then
+		return Promise.resolve(false)
+	end
+
 	local markerId = self:getPlaceMarkerId()
 	if not markerId then
 		Log.trace("No VibeStarter place marker, skipping marker auto-connect")
@@ -431,6 +445,96 @@ function App:tryAutoConnectByMarker()
 			Log.trace("Marker auto-connect found no active server")
 			return false
 		end)
+end
+
+function App:requestMarkerAutoConnect(reason: string?)
+	if self.serveSession ~= nil then
+		return Promise.resolve(false)
+	end
+	if self.markerAutoConnectInFlight then
+		Log.trace("Marker auto-connect already in flight, skipping {}", reason or "request")
+		return self.markerAutoConnectPromise or Promise.resolve(false)
+	end
+
+	self.markerAutoConnectInFlight = true
+	Log.trace("Requesting marker auto-connect ({})", reason or "unspecified")
+
+	self.markerAutoConnectPromise = self:tryAutoConnectByMarker():finally(function()
+		self.markerAutoConnectInFlight = false
+		self.markerAutoConnectPromise = nil
+	end)
+	return self.markerAutoConnectPromise
+end
+
+function App:watchMarkerAutoConnect()
+	if self.markerAutoConnectStorageConnection ~= nil then
+		return
+	end
+
+	local function watchMarker(marker)
+		if self.markerAutoConnectMarkerConnection ~= nil then
+			self.markerAutoConnectMarkerConnection:Disconnect()
+			self.markerAutoConnectMarkerConnection = nil
+		end
+
+		self.markerAutoConnectMarkerConnection = marker:GetAttributeChangedSignal("Id"):Connect(function()
+			self:requestMarkerAutoConnect("marker id changed")
+		end)
+		self:requestMarkerAutoConnect("marker found")
+	end
+
+	local marker = ServerStorage:FindFirstChild("VibeStarter")
+	if marker ~= nil then
+		watchMarker(marker)
+	end
+
+	self.markerAutoConnectStorageConnection = ServerStorage.ChildAdded:Connect(function(child)
+		if child.Name == "VibeStarter" then
+			watchMarker(child)
+		end
+	end)
+end
+
+function App:startMarkerAutoConnectPolling()
+	if self.markerAutoConnectPollingThread ~= nil then
+		return
+	end
+
+	Log.trace("Starting marker auto-connect polling thread")
+	self.markerAutoConnectPollingThread = task.spawn(function()
+		while task.wait(MARKER_AUTO_CONNECT_POLL_SECONDS) do
+			if self.markerAutoConnectPollingThread == nil then
+				return
+			end
+			if self.serveSession ~= nil then
+				continue
+			end
+			if self:getPlaceMarkerId() ~= nil then
+				self:requestMarkerAutoConnect("poll")
+			end
+		end
+	end)
+end
+
+function App:stopMarkerAutoConnect()
+	if self.markerAutoConnectPollingThread ~= nil then
+		Log.trace("Stopping marker auto-connect polling thread")
+		task.cancel(self.markerAutoConnectPollingThread)
+		self.markerAutoConnectPollingThread = nil
+	end
+
+	if self.markerAutoConnectStorageConnection ~= nil then
+		self.markerAutoConnectStorageConnection:Disconnect()
+		self.markerAutoConnectStorageConnection = nil
+	end
+
+	if self.markerAutoConnectMarkerConnection ~= nil then
+		self.markerAutoConnectMarkerConnection:Disconnect()
+		self.markerAutoConnectMarkerConnection = nil
+	end
+
+	self.markerAutoConnectInFlight = false
+	self.markerAutoConnectPromise = nil
 end
 
 function App:checkSyncReminder()
