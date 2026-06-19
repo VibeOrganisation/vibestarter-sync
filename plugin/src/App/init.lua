@@ -66,6 +66,12 @@ function App:init()
 	self.markerAutoConnectPollingThread = nil
 	self.markerAutoConnectStorageConnection = nil
 	self.markerAutoConnectMarkerConnection = nil
+	-- Name of the player currently holding the sync lock against us. Set when we
+	-- surface the "already syncing" warning so we only warn ONCE per contention:
+	-- the marker auto-connect poll re-calls startSession every few seconds (so it
+	-- can resume the instant the lock frees), and without this each tick re-logged
+	-- and re-notified the same message — the ×10 spam users saw in Team Create.
+	self.syncBlockedOwner = nil
 
 	self.waypointConnection = ChangeHistoryService.OnUndo:Connect(function(action: string)
 		if not string.find(action, "^VibeStarter Sync: Patch") then
@@ -700,21 +706,36 @@ function App:startSession(trustedIdentity: boolean?)
 
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
-		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
-
-		Log.warn(msg)
-		self:addNotification({
-			text = msg,
-			timeout = 10,
-		})
-		self:setState({
-			appStatus = AppStatus.Error,
-			errorMessage = msg,
-			toolbarIcon = Assets.Images.PluginButtonWarning,
-		})
+		local ownerName = tostring(priorOwner)
+		-- Warn ONCE per contention. startSession is re-invoked on every marker
+		-- auto-connect poll tick (so sync resumes the moment the lock frees), so
+		-- without this guard the same "already syncing" message logged + notified
+		-- ×10. Only (re)warn when the blocking user is new or has changed.
+		if self.syncBlockedOwner ~= ownerName then
+			self.syncBlockedOwner = ownerName
+			Log.warn(string.format("Could not sync because user '%s' is already syncing", ownerName))
+			self:addNotification({
+				text = string.format(
+					"%s is already syncing this place. Only one person can sync at a time — you'll connect automatically as soon as they stop.",
+					ownerName
+				),
+				timeout = 10,
+			})
+			self:setState({
+				appStatus = AppStatus.Error,
+				errorMessage = string.format(
+					"'%s' is already syncing. You'll connect automatically once they stop.",
+					ownerName
+				),
+				toolbarIcon = Assets.Images.PluginButtonWarning,
+			})
+		end
 
 		return
 	end
+
+	-- Lock claimed: clear the contention memory so a future block warns again.
+	self.syncBlockedOwner = nil
 
 	local host, port = self:getHostAndPort()
 
