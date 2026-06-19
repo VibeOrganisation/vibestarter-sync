@@ -272,7 +272,23 @@ function ApiContext:connectWebSocket(packetHandlers)
 			errored:Disconnect()
 			received:Disconnect()
 
-			reject("WebSocket error: " .. code .. " - " .. msg)
+			-- Keep the raw engine error in the log for debugging…
+			Log.warn("WebSocket error: {} - {}", code, tostring(msg))
+
+			-- …but show the user plain language. An abrupt socket drop surfaces
+			-- as a raw curl error (e.g. `Failed ws recv - err: 0 "No error",
+			-- curlErrBuf: ""`), which almost always means the VibeStarter app was
+			-- closed or restarted out from under the sync — not an actionable bug.
+			local raw = tostring(msg)
+			if
+				raw:find("Failed ws recv", 1, true)
+				or raw:find("Failed ws send", 1, true)
+				or raw:find("curlErrBuf", 1, true)
+			then
+				reject("Lost connection to VibeStarter. The app may have closed or restarted - reopen it to resume syncing.")
+			else
+				reject(("VibeStarter Sync connection error (%s): %s"):format(tostring(code), raw))
+			end
 		end)
 	end)
 end
