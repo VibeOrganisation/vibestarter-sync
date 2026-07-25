@@ -3,8 +3,8 @@
 
 	Imposes the VibeStarter "Soft Industrial" palette (warm dark + orange),
 	independent of the Studio theme, so the plugin matches the app. Colors are
-	mirrored from the app's design tokens (tauri-app/src/styles/tokens.css,
-	dark theme).
+	mirrored from src/styles/tokens.css in the VibeStarter app repository
+	(dark theme).
 ]]
 
 local ContentProvider = game:GetService("ContentProvider")
