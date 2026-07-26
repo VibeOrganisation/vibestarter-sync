@@ -1,0 +1,57 @@
+{
+  "$comment": [
+    "Provenance du sous-arbre VibeStarter Sync. Ce fichier remplace le champ",
+    "`rojoCommit` de scripts/vm-image/guest-build.lock.json : le build ne clone",
+    "plus upstream, il compile ce sous-arbre. La base reste nécessaire pour",
+    "auditer la divergence et pour préparer une montée de version de Rojo.",
+    "",
+    "Divergence par rapport à la base : git diff upstream/<base_tag> -- vendor/sync",
+    "après avoir ajouté le remote upstream ci-dessous.",
+    "",
+    "Rojo est sous MPL 2.0 : les fichiers couverts et modifiés doivent rester",
+    "disponibles sous MPL pour les destinataires du binaire distribué dans",
+    "l'image invitée. Voir scripts/mirror-sync-source.sh."
+  ],
+  "upstream": "https://github.com/rojo-rbx/rojo.git",
+  "baseTag": "v7.7.0-rc.1",
+  "baseCommit": "0113f7b07419b0127ed86cc42a2df56fe57bfaa0",
+  "license": "MPL-2.0",
+  "packages": {
+    "Flipper": {
+      "url": "https://github.com/reselim/flipper.git",
+      "commit": "2d91a5ed55332a3bf50f4eba82f9c812bd2343f8",
+      "version": "v2.0.0",
+      "license": "MIT"
+    },
+    "Highlighter": {
+      "url": "https://github.com/boatbomber/highlighter.git",
+      "commit": "c12c488dadfcf6e7b66a14d107b74e751d08060c",
+      "version": "v0.10.0",
+      "license": "MIT"
+    },
+    "Promise": {
+      "url": "https://github.com/evaera/roblox-lua-promise.git",
+      "commit": "2c6f433903275e689ba1d48402d4a9d6fdc605a5",
+      "version": "v4.0.0",
+      "license": "MIT"
+    },
+    "Roact": {
+      "url": "https://github.com/roblox/roact.git",
+      "commit": "956891b70fdc5410e44e9664719cd0a9f7e6fabd",
+      "version": "v1.4.4",
+      "license": "Apache-2.0"
+    },
+    "TestEZ": {
+      "url": "https://github.com/roblox/testez.git",
+      "commit": "edc7246d0173a3a90eba4a9f64ea26c576be5873",
+      "version": "v0.4.1",
+      "license": "Apache-2.0"
+    },
+    "t": {
+      "url": "https://github.com/osyrisrblx/t.git",
+      "commit": "1dbfccc182d5870cca5266dd6f3d81618f69fc29",
+      "version": "master",
+      "license": "MIT"
+    }
+  }
+}
