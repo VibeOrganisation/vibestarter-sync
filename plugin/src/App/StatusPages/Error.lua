@@ -134,7 +134,13 @@ function ErrorPage:render()
 				}),
 
 				Title = e("TextLabel", {
-					Text = "Connection error",
+					-- The plugin retries on its own whenever a reconnect path is
+					-- armed, so say so: a bare "Connection error" left users
+					-- looking at what reads as a permanent failure while the
+					-- session was being repaired behind it.
+					-- Kept short on purpose: the heading has one line at the
+					-- panel's minimum width, and the detail is right below.
+					Text = if self.state.reconnecting then "Reconnecting…" else "Connection error",
 					FontFace = theme.Font.Bold,
 					TextSize = theme.TextSize.Large,
 					TextColor3 = theme.TextColor,
@@ -197,6 +203,7 @@ function ErrorPage.getDerivedStateFromProps(props)
 
 	return {
 		errorMessage = props.errorMessage,
+		reconnecting = props.reconnecting,
 	}
 end
 

@@ -72,7 +72,16 @@ function NotConnectedPage:render()
 					}),
 
 					Hint = e("TextLabel", {
-						Text = "Ready to sync your project",
+						-- On a Team Create place only one editor syncs at a time
+						-- (`__Rojo_SessionLock`). Saying who holds it turns a
+						-- panel that looked idle for no reason into an answer —
+						-- and one that ends with "you don't have to do anything".
+						Text = if self.props.blockedBy ~= nil and self.props.blockedBy ~= ""
+							then string.format(
+								"%s is syncing this place.\nYou'll connect automatically when they stop.",
+								self.props.blockedBy
+							)
+							else "Ready to sync your project",
 						FontFace = theme.Font.Thin,
 						TextSize = theme.TextSize.Body,
 						TextColor3 = theme.SubTextColor,

@@ -3,12 +3,12 @@ Error.__index = Error
 
 Error.Kind = {
 	HttpNotEnabled = {
-		message = "Rojo requires HTTP access, which is not enabled.\n"
-			.. "Check your game settings, located in the 'Home' tab of Studio.",
+		message = "VibeStarter Sync needs HTTP requests, which are turned off for this place.\n"
+			.. "Open Game Settings from the 'Home' tab of Studio and enable 'Allow HTTP Requests' under Security.",
 	},
 	ConnectFailed = {
-		message = "Couldn't connect to the Rojo server.\n"
-			.. "Make sure the server is running — use 'rojo serve' to run it!",
+		message = "Couldn't reach VibeStarter.\n"
+			.. "The app may have closed or stopped syncing this project - reopen it and start syncing to resume.",
 	},
 	Timeout = {
 		message = "HTTP request timed out.",
@@ -56,7 +56,19 @@ function Error.fromRobloxErrorString(message)
 		return Error.new(Error.Kind.Timeout)
 	end
 
-	if lower:find("^httperror: connectfail") then
+	-- Every way "nothing is listening at the other end" reaches us. `netfail` is
+	-- the one Roblox actually returns most of the time when a local port is
+	-- closed, and it used to fall through to Unknown — which is how a closed
+	-- VibeStarter app surfaced as "Unknown HTTP error: HttpError: NetFail".
+	-- `dnsresolve` is the same story for a host name that no longer resolves:
+	-- nothing the user can act on differently, so it shares the message.
+	-- TLS failures deliberately stay out of this bucket — there the server IS
+	-- answering, and "reopen the app" would be the wrong advice.
+	if
+		lower:find("^httperror: connectfail")
+		or lower:find("^httperror: netfail")
+		or lower:find("^httperror: dnsresolve")
+	then
 		return Error.new(Error.Kind.ConnectFailed)
 	end
 

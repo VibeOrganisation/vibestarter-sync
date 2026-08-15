@@ -46,7 +46,13 @@ local AppStatus = strict("AppStatus", {
 
 local e = Roact.createElement
 
-local MARKER_AUTO_CONNECT_POLL_SECONDS = 2
+-- The reconnect poll fires every two seconds so a server that comes back is
+-- picked up almost immediately, then backs off while nothing answers: without
+-- it, a closed VibeStarter app meant one failed request every two seconds for
+-- the entire Studio session. The cap stays small so the wait after the user
+-- restarts the app is still short.
+local RECONNECT_POLL_MIN_SECONDS = 2
+local RECONNECT_POLL_MAX_SECONDS = 10
 
 local App = Roact.Component:extend("App")
 
@@ -66,6 +72,7 @@ function App:init()
 	self.markerAutoConnectPollingThread = nil
 	self.markerAutoConnectStorageConnection = nil
 	self.markerAutoConnectMarkerConnection = nil
+	self.autoReconnectInFlight = false
 	-- Name of the player currently holding the sync lock against us. Set when we
 	-- surface the "already syncing" warning so we only warn ONCE per contention:
 	-- the marker auto-connect poll re-calls startSession every few seconds (so it
@@ -113,6 +120,15 @@ function App:init()
 			},
 		})
 
+		if dismissNotif == nil then
+			-- Notifications are turned off, so addNotification showed nothing and
+			-- returned nothing. The log line above is the whole story here: wiring
+			-- the listeners below would leave them hanging on a notification that
+			-- does not exist (nothing ever calls their cleanup), and firing one
+			-- would call nil.
+			return
+		end
+
 		undoConnection = ChangeHistoryService.OnUndo:Once(function()
 			-- Our notif is now out of date- redoing will not restore the patch
 			-- since we've undone even further. Dismiss the notif.
@@ -131,6 +147,14 @@ function App:init()
 	self:setState({
 		appStatus = AppStatus.NotConnected,
 		guiEnabled = false,
+		-- Name of the Team Create editor holding the session lock, "" when the
+		-- place is ours to sync. Empty string rather than nil: `setState` merges,
+		-- so a nil would leave the previous holder on screen forever.
+		syncBlockedBy = "",
+		-- True while the error on screen is one the plugin is already retrying on
+		-- its own. Without it the red page reads as a permanent failure while the
+		-- reconnect poll is quietly repairing the session behind it.
+		reconnecting = false,
 		confirmData = {},
 		patchData = {
 			patch = PatchSet.newEmpty(),
@@ -386,6 +410,12 @@ function App:tryAutoReconnect()
 		return Promise.resolve(false)
 	end
 
+	-- Mirrors tryAutoConnectByMarker: now that this runs on a poll and not only
+	-- once at init, it must not start a second session over a live one.
+	if self.serveSession ~= nil then
+		return Promise.resolve(false)
+	end
+
 	local priorSyncInfo = self:getPriorSyncInfo()
 	if not priorSyncInfo.projectName then
 		Log.trace("No prior sync info found, skipping auto-reconnect")
@@ -395,6 +425,10 @@ function App:tryAutoReconnect()
 	return self:findActiveServer()
 		:andThen(function(serverInfo)
 			-- change
+			if self.serveSession ~= nil then
+				-- Something else connected while the request was in flight
+				return false
+			end
 			if serverInfo.projectName == priorSyncInfo.projectName then
 				Log.trace("Auto-reconnect found matching server, reconnecting...")
 				self:addNotification({
@@ -410,6 +444,23 @@ function App:tryAutoReconnect()
 			Log.trace("Auto-reconnect did not find a server, not reconnecting")
 			return false
 		end)
+end
+
+-- True when something will retry the connection without the user doing
+-- anything: either the place marker proves which project this place is, or the
+-- prior-sync fallback is enabled and this place has been synced before. Drives
+-- the "reconnecting" wording on the error page, so an error we are already
+-- repairing does not read as a dead end.
+function App:hasAutomaticReconnectPath(): boolean
+	if not RunService:IsEdit() then
+		return false
+	end
+
+	if self:getPlaceMarkerId() ~= nil then
+		return true
+	end
+
+	return Settings:get("autoReconnect") == true and self:getPriorSyncInfo().projectName ~= nil
 end
 
 -- The VibeStarter app stamps the bound project's UUID into the `Id` attribute
@@ -506,20 +557,71 @@ function App:startMarkerAutoConnectPolling()
 		return
 	end
 
-	Log.trace("Starting marker auto-connect polling thread")
+	Log.trace("Starting reconnect polling thread")
 	self.markerAutoConnectPollingThread = task.spawn(function()
-		while task.wait(MARKER_AUTO_CONNECT_POLL_SECONDS) do
+		local waitSeconds = RECONNECT_POLL_MIN_SECONDS
+
+		while true do
+			task.wait(waitSeconds)
+
 			if self.markerAutoConnectPollingThread == nil then
+				-- The polling thread was stopped, so exit
 				return
 			end
+
 			if self.serveSession ~= nil then
+				-- Syncing: reset the backoff so the next drop is retried fast
+				waitSeconds = RECONNECT_POLL_MIN_SECONDS
 				continue
 			end
-			if self:getPlaceMarkerId() ~= nil then
-				self:requestMarkerAutoConnect("poll")
+
+			if self:pollForReconnect() then
+				-- We asked and we are still not connected, so nothing is
+				-- listening: slow down rather than hammer a dead port.
+				waitSeconds = math.min(waitSeconds * 2, RECONNECT_POLL_MAX_SECONDS)
+			else
+				-- Nothing was attempted, so nothing failed: stay responsive.
+				waitSeconds = RECONNECT_POLL_MIN_SECONDS
 			end
 		end
 	end)
+end
+
+-- One tick of the reconnect poll. Returns true when a connection attempt was
+-- actually made, which is what the caller backs off on.
+--
+-- The marker path is the good one: it proves the place is this project and
+-- connects with no prompt. A place with NO marker used to have no periodic path
+-- at all — its only attempt was the one at init — so a user who lost the
+-- connection (app closed, machine slept) and had once dismissed the sync
+-- reminder was left with nothing retrying and nothing saying so.
+function App:pollForReconnect(): boolean
+	if self.serveSession ~= nil then
+		return false
+	end
+
+	if self:getPlaceMarkerId() ~= nil then
+		self:requestMarkerAutoConnect("poll")
+		return true
+	end
+
+	-- No marker: fall back to the prior-sync reconnect, which does prompt for
+	-- confirmation on the first patch, precisely because identity is unproven.
+	if not Settings:get("autoReconnect") then
+		return false
+	end
+	if self.autoReconnectInFlight then
+		return false
+	end
+	if self:getPriorSyncInfo().projectName == nil then
+		return false
+	end
+
+	self.autoReconnectInFlight = true
+	self:tryAutoReconnect():finally(function()
+		self.autoReconnectInFlight = false
+	end)
+	return true
 end
 
 function App:stopMarkerAutoConnect()
@@ -707,35 +809,43 @@ function App:startSession(trustedIdentity: boolean?)
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local ownerName = tostring(priorOwner)
-		-- Warn ONCE per contention. startSession is re-invoked on every marker
-		-- auto-connect poll tick (so sync resumes the moment the lock frees), so
-		-- without this guard the same "already syncing" message logged + notified
-		-- ×10. Only (re)warn when the blocking user is new or has changed.
+		-- Not an error: on a shared place exactly one person syncs at a time, by
+		-- design, and we will connect on our own the moment they stop. It used to
+		-- render as the red Error page under a warning toolbar icon — which reads
+		-- as a broken plugin, and sent people restarting Studio over a normal
+		-- state of collaboration. It stays on the idle page, which now says who
+		-- is driving.
+		--
+		-- Announce ONCE per contention. startSession is re-invoked on every
+		-- marker auto-connect poll tick (so sync resumes the moment the lock
+		-- frees), so without this guard the same message logged + notified ×10.
+		-- Only (re)announce when the blocking user is new or has changed.
 		if self.syncBlockedOwner ~= ownerName then
 			self.syncBlockedOwner = ownerName
-			Log.warn(string.format("Could not sync because user '%s' is already syncing", ownerName))
+			Log.info(string.format("Not syncing: user '%s' is already syncing this place", ownerName))
 			self:addNotification({
 				text = string.format(
-					"%s is already syncing this place. Only one person can sync at a time — you'll connect automatically as soon as they stop.",
+					"%s is syncing this place. Only one person syncs at a time — you'll connect automatically as soon as they stop.",
 					ownerName
 				),
 				timeout = 10,
 			})
 			self:setState({
-				appStatus = AppStatus.Error,
-				errorMessage = string.format(
-					"'%s' is already syncing. You'll connect automatically once they stop.",
-					ownerName
-				),
-				toolbarIcon = Assets.Images.PluginButtonWarning,
+				appStatus = AppStatus.NotConnected,
+				syncBlockedBy = ownerName,
+				toolbarIcon = Assets.Images.PluginButton,
 			})
 		end
 
 		return
 	end
 
-	-- Lock claimed: clear the contention memory so a future block warns again.
+	-- Lock claimed: clear the contention memory so a future block announces
+	-- again, and stop telling the panel somebody else is driving.
 	self.syncBlockedOwner = nil
+	if self.state.syncBlockedBy ~= "" then
+		self:setState({ syncBlockedBy = "" })
+	end
 
 	local host, port = self:getHostAndPort()
 
@@ -797,6 +907,7 @@ function App:startSession(trustedIdentity: boolean?)
 
 			self:setState({
 				appStatus = AppStatus.Connecting,
+				reconnecting = false,
 				toolbarIcon = Assets.Images.PluginButton,
 			})
 			self:addNotification({
@@ -837,6 +948,7 @@ function App:startSession(trustedIdentity: boolean?)
 				self:setState({
 					appStatus = AppStatus.Error,
 					errorMessage = tostring(details),
+					reconnecting = self:hasAutomaticReconnectPath(),
 					toolbarIcon = Assets.Images.PluginButtonWarning,
 				})
 				self:addNotification({
@@ -846,6 +958,7 @@ function App:startSession(trustedIdentity: boolean?)
 			else
 				self:setState({
 					appStatus = AppStatus.NotConnected,
+					reconnecting = false,
 					toolbarIcon = Assets.Images.PluginButton,
 				})
 				self:addNotification({
@@ -868,11 +981,22 @@ function App:startSession(trustedIdentity: boolean?)
 			return "Accept"
 		end
 
-		-- Marker auto-connect already proved this place is the served project,
-		-- so there is no risk of clobbering an unrelated place: skip the prompt.
+		-- Marker auto-connect already proved this place is the served project, so
+		-- there is no risk of clobbering an unrelated place. But the prompt was
+		-- guarding TWO risks, and proving identity only answers the first: the
+		-- second is a patch that deletes work. So skip the prompt only while the
+		-- patch removes nothing — the everyday case (empty patch, or additions
+		-- and property updates) stays friction-free, and a destructive first sync
+		-- still gets a human in the loop even though we auto-connected.
 		if self.sessionTrustedIdentity then
-			Log.trace("Accepting patch without confirmation because the place identity is proven (marker match)")
-			return "Accept"
+			if not PatchSet.hasRemoves(patch) then
+				Log.trace(
+					"Accepting patch without confirmation because the place identity is proven (marker match) and the patch deletes nothing"
+				)
+				return "Accept"
+			end
+
+			Log.trace("Place identity is proven, but the patch deletes instances: asking for confirmation")
 		end
 
 		local confirmationBehavior = Settings:get("confirmationBehavior")
@@ -1024,6 +1148,7 @@ function App:render()
 					Tooltips = e(Tooltip.Container, nil),
 
 					NotConnectedPage = createPageElement(AppStatus.NotConnected, {
+						blockedBy = self.state.syncBlockedBy,
 						onConnect = function()
 							self:startSession()
 						end,
@@ -1063,10 +1188,12 @@ function App:render()
 
 					Error = createPageElement(AppStatus.Error, {
 						errorMessage = self.state.errorMessage,
+						reconnecting = self.state.reconnecting,
 
 						onClose = function()
 							self:setState({
 								appStatus = AppStatus.NotConnected,
+								reconnecting = false,
 								toolbarIcon = Assets.Images.PluginButton,
 							})
 						end,
