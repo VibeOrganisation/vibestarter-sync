@@ -188,6 +188,13 @@ function ServeSession:hookPostcommit(callback)
 	end
 end
 
+-- How long to wait before reopening a stream that just dropped, so a server
+-- that is genuinely gone yields a paced retry instead of a hot loop. This is
+-- only the transparent-resume path (the session stays Connected throughout);
+-- a server that actually changed or vanished falls through to App's own
+-- reconnect poll, which has its own, longer backoff.
+local STREAM_RESUME_DELAY_SECONDS = 1
+
 function ServeSession:start()
 	self:__setStatus(Status.Connecting)
 	self:setLoadingText("Connecting to server...")
@@ -201,26 +208,84 @@ function ServeSession:start()
 				self:__setStatus(Status.Connected, serverInfo.projectName)
 				self:__applyGameAndPlaceId(serverInfo)
 
-				return self.__apiContext:connectWebSocket({
-					["messages"] = function(messagesPacket)
-						if self.__status == Status.Disconnected then
-							return
-						end
-
-						Log.debug("Received {} messages from VibeStarter Sync server", #messagesPacket.messages)
-
-						for _, message in messagesPacket.messages do
-							self:__applyPatch(message)
-						end
-						self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
-					end,
-				})
+				return self:__streamMessages()
 			end)
 		end)
 		:catch(function(err)
 			if self.__status ~= Status.Disconnected then
 				self:__stopInternal(err)
 			end
+		end)
+end
+
+--[[
+	Hold the message stream open for the life of the session, reopening it —
+	rather than ending the session — when it drops under a server that is still
+	the same one.
+
+	Why this exists. The socket drops. Measured on 2026-08-24, it dropped while a
+	playtest was starting: Studio's own HTTP/curl stack degrades under the load
+	of entering play mode ("Connection fell back to legacy networking"), and the
+	long-lived WebSocket is the first thing to feel it — plain requests to the
+	same server kept working throughout, so the server was never gone. Each drop
+	used to end the whole session, which App's reconnect poll then rebuilt from
+	scratch: a fresh /api/rojo, a full /api/read of the tree, rehydrate, diff and
+	patch — inside the edit DataModel, while the game runs — every couple of
+	seconds. That is the noise in the console, and a load that feeds the very
+	contention that dropped the socket.
+
+	The server keeps every message in an untrimmed queue (see server
+	`message_queue.rs`), so reopening the socket at our last cursor replays
+	exactly the patches we missed and nothing we already applied — the reconciler
+	and instance map are kept intact. So on a drop we check the server is still
+	the same session and, if so, reopen the stream without a resync and without
+	flipping to Disconnected (the user sees nothing). Only a server that changed
+	id or cannot be reached needs the full reconnect, which we surface by
+	rejecting.
+]]
+function ServeSession:__streamMessages()
+	return self.__apiContext
+		:connectWebSocket({
+			["messages"] = function(messagesPacket)
+				if self.__status == Status.Disconnected then
+					return
+				end
+
+				Log.debug("Received {} messages from VibeStarter Sync server", #messagesPacket.messages)
+
+				for _, message in messagesPacket.messages do
+					self:__applyPatch(message)
+				end
+				self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
+			end,
+		})
+		:catch(function(err)
+			-- Stopping (or already stopped): a closed socket is expected, done.
+			if self.__status == Status.Disconnected then
+				return Promise.resolve()
+			end
+
+			return self.__apiContext:hasSameSession():andThen(function(sameSession)
+				if not sameSession then
+					-- The server changed or is unreachable: this is a real
+					-- disconnect, and the full reconnect path must run.
+					return Promise.reject(err)
+				end
+
+				Log.info(
+					"VibeStarter Sync stream dropped; resuming at cursor {} without a resync",
+					self.__apiContext:getMessageCursor()
+				)
+
+				return Promise.delay(STREAM_RESUME_DELAY_SECONDS):andThen(function()
+					-- stop() may have landed during the delay.
+					if self.__status == Status.Disconnected then
+						return Promise.resolve()
+					end
+
+					return self:__streamMessages()
+				end)
+			end)
 		end)
 end
 
