@@ -27,6 +27,27 @@ end
 if game:GetService("RunService"):IsRunning() then
 	local ok, autoConnect = pcall(plugin.GetSetting, plugin, "Rojo_autoConnectPlaytestServer")
 	if not ok or autoConnect ~= true then
+		-- The tool channel, and NOTHING else — no Roact, no App, no Settings.
+		--
+		-- The guard above exists because loading the whole plugin into every
+		-- playtest cost 15-24 s twice per playtest and tripped the watchdog.
+		-- The channel is not that: it is one module, one folder and a polling
+		-- task. What it buys is the tools that can only be answered from
+		-- inside a running game — `character_navigation` needs a Humanoid,
+		-- and there is no Humanoid in Edit.
+		--
+		-- The heaviest thing this path could have pulled in is the 2.1 MB
+		-- reflection database, and it no longer pulls it: `Handlers` requires
+		-- it on first use, which in a playtest is usually never.
+		--
+		-- `warn` rather than Log: Log would be one more module required for a
+		-- line that is only ever read when the channel already failed.
+		local toolsOk, toolsError = pcall(function()
+			require(script.Tools).start(plugin)
+		end)
+		if not toolsOk then
+			warn("VibeStarter's Studio tool channel did not start in this playtest: " .. tostring(toolsError))
+		end
 		return
 	end
 end
@@ -44,6 +65,27 @@ local App = require(script.App)
 Log.setLogLevelThunk(function()
 	return Log.Level[Settings:get("logLevel")] or Log.Level.Info
 end)
+
+-- VibeStarter's sovereign Studio channel: the app's agents reach this place
+-- through this plugin, on the app's own loopback port, with no setting of
+-- Roblox's in the path. Started before the UI and independently of it — it is
+-- what carries the Studio tool surface, so it must not be gated on Roact
+-- mounting successfully.
+--
+-- This is the Edit datamodel's copy. A playtest reaches the channel through
+-- the guard above and stops there, so both kinds of DataModel now attach and
+-- the app tells them apart by `dataModelType` rather than by counting.
+-- pcall, and this one is not decoration. Syncing is what this plugin is for
+-- and it works today; the tool channel is new next to it. A module that fails
+-- to compile or throws on its first line must cost the channel, never the
+-- sync — and Studio does not isolate one `require` from the script that made
+-- it.
+local toolsOk, toolsError = pcall(function()
+	require(script.Tools).start(plugin)
+end)
+if not toolsOk then
+	Log.warn("VibeStarter's Studio tool channel did not start: {}. Syncing is unaffected.", tostring(toolsError))
+end
 
 local app = Roact.createElement(App, {
 	plugin = plugin,

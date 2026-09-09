@@ -140,6 +140,39 @@ function ApiContext:setMessageCursor(index)
 	self.__messageCursor = index
 end
 
+function ApiContext:getMessageCursor()
+	return self.__messageCursor
+end
+
+--[[
+	Whether the server is still the session we connected to.
+
+	A cheap GET, used before resuming a dropped message stream. The server keeps
+	every message in an untrimmed queue keyed by that session, so if the id still
+	matches, our cursor is still valid and the socket can be reopened at it
+	without re-reading and re-diffing the whole tree. A server that changed id
+	(rojo was restarted) or cannot be reached right now answers false, which
+	sends the caller to the full reconnect path instead of resuming against a
+	server it could not validate.
+]]
+function ApiContext:hasSameSession()
+	local priorSessionId = self.__sessionId
+	if priorSessionId == nil then
+		return Promise.resolve(false)
+	end
+
+	local url = ("%s/api/rojo"):format(self.__baseUrl)
+	return Http.get(url)
+		:andThen(rejectFailedRequests)
+		:andThen(Http.Response.json)
+		:andThen(function(body)
+			return body.sessionId == priorSessionId
+		end)
+		:catch(function()
+			return false
+		end)
+end
+
 function ApiContext:connect()
 	local url = ("%s/api/rojo"):format(self.__baseUrl)
 
@@ -221,6 +254,17 @@ function ApiContext:connectWebSocket(packetHandlers)
 	url = url:gsub("^http://", "ws://"):gsub("^https://", "wss://")
 
 	return Promise.new(function(resolve, reject)
+		-- Free the handle of a stream we are replacing. On a resume the old
+		-- client has already errored and disconnected its own signals, but its
+		-- underlying curl handle lives until it is closed, and a playtest can
+		-- drop the socket many times.
+		if self.__wsClient then
+			pcall(function()
+				self.__wsClient:Close()
+			end)
+			self.__wsClient = nil
+		end
+
 		local success, wsClient =
 			pcall(HttpService.CreateWebStreamClient, HttpService, Enum.WebStreamClientType.WebSocket, {
 				Url = url,
@@ -272,13 +316,19 @@ function ApiContext:connectWebSocket(packetHandlers)
 			errored:Disconnect()
 			received:Disconnect()
 
-			-- Keep the raw engine error in the log for debugging…
-			Log.warn("WebSocket error: {} - {}", code, tostring(msg))
+			-- Keep the raw engine error in the log for debugging — at debug
+			-- level: a dropped socket is ordinary (the session resumes it, see
+			-- ServeSession), and the warning that used to be printed here
+			-- was what filled the Output during every playtest.
+			Log.debug("WebSocket error: {} - {}", code, tostring(msg))
 
 			-- …but show the user plain language. An abrupt socket drop surfaces
 			-- as a raw curl error (e.g. `Failed ws recv - err: 0 "No error",
-			-- curlErrBuf: ""`), which almost always means the VibeStarter app was
-			-- closed or restarted out from under the sync — not an actionable bug.
+			-- curlErrBuf: ""`). It used to be read as "the app was closed or
+			-- restarted"; measured on 2026-08-24, it also happens under a
+			-- running app, every few seconds, while a playtest is starting —
+			-- Studio's HTTP stack drops the idle socket. Only a resume that
+			-- fails makes this message the user's problem.
 			local raw = tostring(msg)
 			if
 				raw:find("Failed ws recv", 1, true)

@@ -23,6 +23,7 @@ local PatchTree = require(Plugin.PatchTree)
 local preloadAssets = require(Plugin.preloadAssets)
 local soundPlayer = require(Plugin.soundPlayer)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
+local SyncEndpoint = require(Plugin.SyncEndpoint)
 local timeUtil = require(Plugin.timeUtil)
 local Theme = require(script.Theme)
 
@@ -166,6 +167,16 @@ function App:init()
 	})
 
 	if RunService:IsEdit() then
+		-- The endpoint VibeStarter pushed to this window, if it pushed one.
+		-- Subscribed BEFORE the initial auto-connect below: the tool channel
+		-- starts ahead of this component (`init.server.lua`), so a push can
+		-- already have landed, and connecting to the compiled-in default first
+		-- would be a round trip to the wrong project's server.
+		self.syncEndpointConnection = SyncEndpoint.Changed:Connect(function()
+			self:useSyncEndpoint()
+		end)
+		self:useSyncEndpoint()
+
 		self:startMarkerAutoConnectPolling()
 		self:watchMarkerAutoConnect()
 		self:startSyncReminderPolling()
@@ -217,6 +228,11 @@ function App:willUnmount()
 
 	if self.disconnectSyncReminderPollingChanged then
 		self.disconnectSyncReminderPollingChanged()
+	end
+
+	if self.syncEndpointConnection then
+		self.syncEndpointConnection:Disconnect()
+		self.syncEndpointConnection = nil
 	end
 
 	self:stopMarkerAutoConnect()
@@ -307,9 +323,19 @@ function App:setPriorSyncInfo(host: string, port: string, projectName: string)
 		return
 	end
 
+	-- A pushed endpoint is never saved. It is allocated per app run and per
+	-- project (`vm::rojo_ports`), and these settings are global to the plugin
+	-- and cached per window at load — so a saved port would come back on the
+	-- next Studio launch and be handed to whichever window read it first,
+	-- which is exactly the confusion the push exists to remove. What IS worth
+	-- remembering is the project name, and that is saved either way.
+	local pushed = SyncEndpoint.get()
+	local pushedHost = if pushed ~= nil then pushed.host else nil
+	local pushedPort = if pushed ~= nil then pushed.port else nil
+
 	priorSyncInfos[id] = {
-		host = if host ~= Config.defaultHost then host else nil,
-		port = if port ~= Config.defaultPort then port else nil,
+		host = if host ~= Config.defaultHost and host ~= pushedHost then host else nil,
+		port = if port ~= Config.defaultPort and port ~= pushedPort then port else nil,
 		projectName = projectName,
 		timestamp = now,
 	}
@@ -504,6 +530,46 @@ function App:tryAutoConnectByMarker()
 		end)
 end
 
+-- Apply the endpoint VibeStarter pushed to this window.
+--
+-- The push carries the project the app believes this place is bound to; the
+-- marker in `ServerStorage.VibeStarter` is what this place says it is. When
+-- they disagree the app addressed the wrong window, and the safe reading is the
+-- place's own — pointing it at another project's server would sync the wrong
+-- tree into it.
+--
+-- Applied through the same host/port bindings the play-solo path writes
+-- (`useRunningConnectionInfo`), so `findActiveServer`, the marker poll and the
+-- sync reminder all pick it up with no further plumbing. The connection itself
+-- goes through the marker auto-connect, which is what proves identity before
+-- connecting: the served project must announce the UUID this place is stamped
+-- with, or nothing happens.
+function App:useSyncEndpoint()
+	local endpoint = SyncEndpoint.get()
+	if endpoint == nil then
+		return
+	end
+
+	local markerId = self:getPlaceMarkerId()
+	if endpoint.projectId ~= nil and markerId ~= nil and endpoint.projectId ~= markerId then
+		Log.trace("Ignoring a sync endpoint pushed for another project")
+		return
+	end
+
+	Log.trace("Using the sync endpoint VibeStarter pushed: {}:{}", endpoint.host, endpoint.port)
+	self.setHost(endpoint.host)
+	self.setPort(endpoint.port)
+
+	if self.serveSession ~= nil then
+		-- Already syncing, and the only automatic path to a session is the
+		-- marker one, which connects nowhere but this project's own server.
+		-- Restarting it would drop a working session to rebuild the same one.
+		return
+	end
+
+	self:requestMarkerAutoConnect("sync endpoint pushed")
+end
+
 function App:requestMarkerAutoConnect(reason: string?)
 	if self.serveSession ~= nil then
 		return Promise.resolve(false)
@@ -660,9 +726,40 @@ function App:checkSyncReminder()
 			-- automatically with no prompt instead of reminding. This is what
 			-- covers opening a linked place after Studio is already running (the
 			-- plugin does not re-init on place change, but this polls every 30s).
-			if serverInfo.vibestarterProjectId ~= nil and serverInfo.vibestarterProjectId == self:getPlaceMarkerId() then
+			local markerId = self:getPlaceMarkerId()
+			if serverInfo.vibestarterProjectId ~= nil and serverInfo.vibestarterProjectId == markerId then
 				Log.trace("Place marker matches served project, auto-connecting")
 				self:startSession(true)
+				return
+			end
+
+			-- Reaching here means the two ids did NOT match. When both exist,
+			-- that is positive proof this server belongs to another project,
+			-- and offering it would be offering to sync another project's tree
+			-- into this place.
+			--
+			-- It became reachable the day VibeStarter could hold several
+			-- projects open at once. Project A serves 34872, project B 34880;
+			-- B's window has not been pushed its endpoint yet (install,
+			-- compile and publish all happen before `rojo serve` answers), so
+			-- it is still dialling the compiled-in default — and finds A. The
+			-- prompt said "Project 'A' is serving at localhost:34872. Would you
+			-- like to connect?", and accepting it would overwrite B's place.
+			--
+			-- Silent, and silent on every later pass too: the reminder poll
+			-- asks again every 30s and lands here every time, which is the
+			-- correct answer to "should the user be shown this?" — no. The
+			-- window connects on its own the moment its own server answers and
+			-- the app pushes it the port.
+			--
+			-- Both halves of the condition are load-bearing. A place with no
+			-- marker has no project to be wrong about, and a server with no
+			-- `vibestarterProjectId` (an older fork, a `rojo serve` run by
+			-- hand) has said nothing that could contradict this place — those
+			-- keep the prompt, because there the user is the only one who
+			-- knows.
+			if markerId ~= nil and serverInfo.vibestarterProjectId ~= nil then
+				Log.trace("A server is up for a different project, not offering to connect")
 				return
 			end
 
