@@ -34,6 +34,7 @@ local Log = require(Rojo.Packages.Log)
 
 local Config = require(script.Parent.Config)
 local Handlers = require(script.Handlers)
+local Deadline = require(script.Deadline)
 
 local Tools = {}
 
@@ -367,7 +368,11 @@ local function serve(port, session, job, context)
 		-- mechanism compiled the source. The app logs it, because "the plugin
 		-- served it" without "how" is what had to be asked back by hand on
 		-- 2026-08-23.
-		local ran, first, second, third, fourth = pcall(handler, job.arguments or {}, context)
+		-- Reserve time to post the failure and resume polling before the host
+		-- expires its request. A timed-out handler must not own this loop forever.
+		local budget = type(job.deadlineMs) == "number" and job.deadlineMs / 1000 or 120
+		budget = math.max(0.001, budget - math.min(5, budget * 0.1))
+		local ran, first, second, third, fourth = Deadline.run(budget, handler, job.arguments or {}, context)
 		if ran then
 			ok, text, unsupported, mechanism = first, second, third == true, fourth
 		else
