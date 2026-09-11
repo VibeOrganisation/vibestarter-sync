@@ -530,6 +530,8 @@ function Tools.start(plugin)
 		local retry = RETRY_MIN
 		while running do
 			local port = discover()
+			-- Publishing a draft can change these without reloading the plugin.
+			local attachedPlaceId, attachedGameId = game.PlaceId, game.GameId
 			local session = port ~= nil and attach(port, nonce) or nil
 			if session == nil then
 				announceIfPlaytest(
@@ -547,7 +549,7 @@ function Tools.start(plugin)
 			Log.info("Connected to VibeStarter's Studio channel on port {}", tostring(port))
 			live = { port = port, sessionId = session.sessionId, token = session.token }
 			local pollUrl = url(port, ("/poll?session=%s&token=%s"):format(session.sessionId, session.token))
-			while running do
+			while running and game.PlaceId == attachedPlaceId and game.GameId == attachedGameId do
 				local startedAt = os.clock()
 				local ok, body, status = request({
 					Url = pollUrl,
@@ -571,9 +573,13 @@ function Tools.start(plugin)
 					task.wait(RECONNECT_DELAY)
 					break
 				end
+				-- Do not execute jobs addressed to the identity before publication.
+				-- The next attach replaces this session using the same nonce.
+				if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then break end
 				local jobs = type(body) == "table" and body.jobs or nil
 				if type(jobs) == "table" and #jobs > 0 then
 					for _, job in ipairs(jobs) do
+						if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then break end
 						-- Serially, on purpose. Two tool calls interleaved
 						-- inside one place would let an agent observe a tree
 						-- half-written by another, and the app's per-place
