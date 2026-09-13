@@ -274,6 +274,13 @@ local function dataModelType()
 	return RunService:IsServer() and "Server" or "Client"
 end
 
+local function nativeTestId()
+	local ok, args = pcall(function()
+		return game:GetService("StudioTestService"):GetTestArgs()
+	end)
+	return ok and type(args) == "table" and args.vibeStarterTestId or nil
+end
+
 local function attach(port, nonce)
 	-- Read once: `populated` is only meaningful without a marker, and only
 	-- worth its `GetDescendants` scan then.
@@ -308,6 +315,7 @@ local function attach(port, nonce)
 			-- the client would not see a failure, it would see a wrong answer.
 			dataModelType = dataModelType(),
 			sessionNonce = nonce,
+			nativeTestId = nativeTestId(),
 		}),
 	})
 	if not ok then
@@ -348,6 +356,20 @@ end
 
 local function serve(port, session, job, context)
 	local handler = Handlers[job.tool]
+	local arguments = job.arguments or {}
+	if RunService:IsEdit() and arguments.__nativeEpoch ~= nil and handler then
+		local selected = handler
+		handler = function(args, ctx)
+			require(script.Playtest).checkEpoch(args)
+			return selected(args, ctx)
+		end
+	end
+	local expected = arguments.__nativeTestId
+	if expected ~= nil and RunService:IsServer() and not RunService:IsEdit() and nativeTestId() ~= expected then
+		handler = function()
+			return false, "STUDIO_STALE_TEST: Runtime identity changed; action refused."
+		end
+	end
 	-- `unsupported` means "this Studio session cannot do this", as opposed to
 	-- "this call failed". The gateway returns that incapacity directly to the
 	-- agent, so it must never be set for an ordinary failure.
@@ -388,7 +410,7 @@ local function serve(port, session, job, context)
 		payload.mechanism = mechanism
 	end
 	if ok then
-		payload.result = { content = { { type = "text", text = tostring(text) } } }
+		payload.result = type(text) == "table" and text or { content = { { type = "text", text = tostring(text) } } }
 	else
 		payload.error = tostring(text)
 		payload.unsupported = unsupported == true
@@ -447,6 +469,17 @@ function Tools.start(plugin)
 	-- It does not need to: client work is carried by the playtest's **server**,
 	-- which has both HTTP and plugin security. See `ClientProxy.lua`.
 	if RunService:IsRunning() and not RunService:IsServer() then
+		-- VirtualInput requires a plugin callback in the client. The HTTP relay
+		-- remains server-only; the LocalScript invokes this local inputEndpoint.
+		local inputEndpoint = Instance.new("BindableFunction")
+		inputEndpoint.Name = "VibeStarterPluginInput"
+		inputEndpoint.OnInvoke = function(args)
+			return require(script.RuntimeTools).player_input(args, true)
+		end
+		inputEndpoint.Parent = game:GetService("ReplicatedStorage")
+		plugin.Unloading:Connect(function()
+			inputEndpoint:Destroy()
+		end)
 		return
 	end
 
@@ -535,11 +568,13 @@ function Tools.start(plugin)
 			local session = port ~= nil and attach(port, nonce) or nil
 			if session == nil then
 				announceIfPlaytest(
-					port == nil and ("no VibeStarter answered on ports %d-%d (%s)"):format(
-						FIRST_PORT,
-						LAST_PORT,
-						lastTransportError ~= nil and lastTransportError or "no transport error"
-					) or "the app refused this plugin's attach"
+					port == nil
+							and ("no VibeStarter answered on ports %d-%d (%s)"):format(
+								FIRST_PORT,
+								LAST_PORT,
+								lastTransportError ~= nil and lastTransportError or "no transport error"
+							)
+						or "the app refused this plugin's attach"
 				)
 				task.wait(retry)
 				retry = math.min(retry * 2, RETRY_MAX)
@@ -575,11 +610,15 @@ function Tools.start(plugin)
 				end
 				-- Do not execute jobs addressed to the identity before publication.
 				-- The next attach replaces this session using the same nonce.
-				if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then break end
+				if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then
+					break
+				end
 				local jobs = type(body) == "table" and body.jobs or nil
 				if type(jobs) == "table" and #jobs > 0 then
 					for _, job in ipairs(jobs) do
-						if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then break end
+						if game.PlaceId ~= attachedPlaceId or game.GameId ~= attachedGameId then
+							break
+						end
 						-- Serially, on purpose. Two tool calls interleaved
 						-- inside one place would let an agent observe a tree
 						-- half-written by another, and the app's per-place

@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     branches:
-    - master
+    - vibestarter-sync
 
   pull_request:
     branches:
-    - master
+    - vibestarter-sync
 
 jobs:
   build:

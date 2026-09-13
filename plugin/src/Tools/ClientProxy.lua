@@ -59,6 +59,8 @@ local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+local Deadline = require(script.Parent.Deadline)
+local PlayerTarget = require(script.Parent.PlayerTarget)
 local ClientProxy = {}
 
 local FOLDER_NAME = "VibeStarterClientProxy"
@@ -104,10 +106,12 @@ local toClient = folder:WaitForChild("ToClient", 30)
 local toServer = folder:WaitForChild("ToServer", 30)
 local logRemote = folder:WaitForChild("Log", 30)
 local runtime = folder:WaitForChild("Runtime", 30)
-if toClient == nil or toServer == nil or logRemote == nil or runtime == nil then
+local deadline = folder:WaitForChild("Deadline", 30)
+if toClient == nil or toServer == nil or logRemote == nil or runtime == nil or deadline == nil then
 	return
 end
 
+local Deadline = require(deadline)
 local okRuntime, Runtime = pcall(require, runtime)
 if not okRuntime then
 	Runtime = nil
@@ -143,12 +147,7 @@ local function respond(...)
     toServer:FireServer(...)
 end
 
-toClient.OnClientEvent:Connect(function(jobId, chunk, raw)
-	local okFactory, factory = pcall(require, chunk)
-	if not okFactory or type(factory) ~= "function" then
-		respond(jobId, false, "the client could not require the chunk: " .. tostring(factory))
-		return
-	end
+toClient.OnClientEvent:Connect(function(jobId, chunk, raw, budget)
 
 	local printed = {}
 	local function capture(...)
@@ -159,7 +158,11 @@ toClient.OnClientEvent:Connect(function(jobId, chunk, raw)
 		table.insert(printed, table.concat(parts, "\t"))
 	end
 
-	local results = table.pack(pcall(factory, capture))
+	local results = table.pack(Deadline.run(budget, function()
+		local okFactory, factory = pcall(require, chunk)
+		assert(okFactory and type(factory) == "function", "the client could not require the chunk: " .. tostring(factory))
+		return factory(capture)
+	end))
 	if not results[1] then
 		local reason = "[error] " .. tostring(results[2])
 		if #printed > 0 then
@@ -207,6 +210,7 @@ local toServer = nil
 local logRemote = nil
 local runtimeClone = nil
 local queryClone = nil
+local captureClone = nil
 local playersConnections = {}
 -- Keep the actual scripts, not just their names: after a proxy rebuild an
 -- old script is still listening to the destroyed RemoteEvents.
@@ -286,6 +290,8 @@ end
 	old player connections are dropped first, so a rebuild cannot stack a
 	second `PlayerAdded` handler on the first.
 ]]
+local runtimeToolsClone = nil
+local deadlineClone = nil
 local function ensure(runtimeModule, queryModule)
 	local standing = folder ~= nil
 		and folder.Parent == ReplicatedStorage
@@ -299,6 +305,12 @@ local function ensure(runtimeModule, queryModule)
 		and runtimeClone.Parent == folder
 		and queryClone ~= nil
 		and queryClone.Parent == folder
+		and captureClone ~= nil
+		and captureClone.Parent == folder
+		and runtimeToolsClone ~= nil
+		and runtimeToolsClone.Parent == folder
+		and deadlineClone ~= nil
+		and deadlineClone.Parent == folder
 	if not standing then
 		for _, connection in ipairs(playersConnections) do
 			connection:Disconnect()
@@ -335,6 +347,15 @@ local function ensure(runtimeModule, queryModule)
 		queryClone = queryModule:Clone()
 		queryClone.Name = "Query"
 		queryClone.Parent = folder
+		captureClone = script.Parent.CaptureView:Clone()
+		captureClone.Name = "CaptureView"
+		captureClone.Parent = folder
+		runtimeToolsClone = script.Parent.RuntimeTools:Clone()
+		runtimeToolsClone.Name = "RuntimeTools"
+		runtimeToolsClone.Parent = folder
+		deadlineClone = script.Parent.Deadline:Clone()
+		deadlineClone.Name = "Deadline"
+		deadlineClone.Parent = folder
 
 		toServer.OnServerEvent:Connect(function(player, jobId, ok, text)
 			local pending = pendingJobs[jobId]
@@ -412,12 +433,8 @@ local function chooseClient(playerName)
 			true
 	end
 	if type(playerName) == "string" and playerName ~= "" then
-		for _, player in ipairs(players) do
-			if player.Name == playerName or player.DisplayName == playerName then
-				return player
-			end
-		end
-		return nil, ("No player named '%s' is in this playtest."):format(playerName), false
+		local player, why = PlayerTarget.resolve(players, playerName)
+		return player, why, false
 	end
 	if #players == 1 then
 		return players[1]
@@ -477,28 +494,49 @@ local function callClient(player, source, raw)
 
 	local pending = { player = player, signal = Instance.new("BindableEvent"), answer = nil }
 	pendingJobs[jobId] = pending
-	task.delay(REPLY_TIMEOUT, function()
-		if pendingJobs[jobId] == pending and pending.answer == nil then
+	-- Cleanup belongs to the watchdog too: Deadline may cancel the waiter
+	-- before this client's reply, so code after Event:Wait is not guaranteed.
+	local cleaned = false
+	local function cleanup()
+		if cleaned then
+			return
+		end
+		cleaned = true
+		pendingJobs[jobId] = nil
+		pending.signal:Destroy()
+		chunk:Destroy()
+	end
+	local replyTimeout = math.min(REPLY_TIMEOUT, Deadline.remaining() or REPLY_TIMEOUT)
+	local expired = false
+	local timer = task.delay(replyTimeout, function()
+		expired = true
+		if pending.answer == nil then
 			pending.signal:Fire()
 		end
+		cleanup()
 	end)
-
-	toClient:FireClient(player, jobId, chunk, raw == true)
-	if pending.answer == nil then
-		pending.signal.Event:Wait()
-	end
-
+	local sent, failure = pcall(function()
+		-- Leave time for the client's timeout response to cross the remote.
+		toClient:FireClient(player, jobId, chunk, raw == true, math.max(0.001, replyTimeout - 1))
+		if pending.answer == nil then
+			pending.signal.Event:Wait()
+		end
+	end)
 	local answer = pending.answer
-	pendingJobs[jobId] = nil
-	pending.signal:Destroy()
-	chunk:Destroy()
+	cleanup()
+	if not expired and coroutine.status(timer) ~= "dead" then
+		task.cancel(timer)
+	end
+	if not sent then
+		return nil, "Could not reach the client: " .. tostring(failure), true
+	end
 
 	if answer == nil then
 		return nil,
 			(
-				"%s's client did not answer within %ds. Its agent may not have loaded yet, or the "
+				"%s's client did not answer within %.1fs. Its agent may not have loaded yet, or the "
 				.. "code it was given never returned."
-			):format(player.Name, REPLY_TIMEOUT),
+			):format(player.Name, replyTimeout),
 			true
 	end
 	return answer
@@ -655,6 +693,23 @@ function ClientProxy.prewarm(runtimeModule, queryModule)
 			task.wait(0.5)
 		end
 	end)
+end
+
+-- Readiness is observed, not inferred from a delay or server attachment.
+-- Called by the app before confirming a native Play start.
+function ClientProxy.readiness(runtimeModule, queryModule)
+	ensure(runtimeModule, queryModule)
+	local players = Players:GetPlayers()
+	local ready = 0
+	local names = {}
+	for _, player in ipairs(players) do
+		table.insert(names, player.Name)
+		if installAgent(player) and clientLogs[player] ~= nil then
+			ready += 1
+		end
+	end
+	table.sort(names)
+	return { ready = #players > 0 and ready == #players, players = #players, clientsReady = ready, playerNames = names }
 end
 
 -- Exported for the handlers that write chunks requiring the cloned modules:

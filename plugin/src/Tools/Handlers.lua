@@ -2,10 +2,8 @@
 	The tools this plugin answers, on public Roblox API only.
 
 	Each one implements a name from VibeStarter's agent-facing Studio contract.
-	They need no private engine transport: reading the tree, reading the log and
-	running Luau are things a plugin may do. The two that are not —
-	rendering the viewport and toggling play mode — are not here and will not
-	be; see `docs/studio-surface-outils-independante.md`.
+	Ordinary tools return text. Internal native handlers return structured
+	state or pixel payloads for the app's playtest and capture orchestration.
 
 	Every handler returns `ok, text`. `text` is what the agent reads in both
 	cases, so a failure is a sentence with a next step in it rather than a
@@ -27,6 +25,7 @@ local Query = require(script.Parent.Query)
 -- Reaching the playtest's client, from the state that can. The client DataModel
 -- has no HTTP of its own and never will; see `ClientProxy.lua`.
 local ClientProxy = require(script.Parent.ClientProxy)
+local PlayerTarget = require(script.Parent.PlayerTarget)
 
 --[[
 	Which DataModel this Lua state is, in the vocabulary the app routes with.
@@ -115,7 +114,11 @@ local resolve = Query.resolve
 	rest produces either duplicates under an old name or values Roblox itself
 	does not expose to scripts, and both crowd out the ones that matter.
 ]]
+local propertiesCache = {}
 local function readableProperties(className)
+	if propertiesCache[className] then
+		return propertiesCache[className]
+	end
 	local names = {}
 	local seen = {}
 	local current = className
@@ -144,6 +147,7 @@ local function readableProperties(className)
 		current = class.Superclass
 	end
 	table.sort(names)
+	propertiesCache[className] = names
 	return names
 end
 
@@ -208,7 +212,41 @@ return { lines = Query.inspect(instance, { %s }, Runtime.describe) }
 	return true, table.concat(answer.lines, "\n")
 end
 
+local function structuredQuery(operation, arguments)
+	if arguments.properties then
+		assert(type(arguments.properties) == "table" and #arguments.properties <= 50, "At most 50 properties")
+	end
+	local propertiesByClass = {}
+	local function clientCall(method, extra)
+		local code = ("local Query=require(game:GetService('ReplicatedStorage'):WaitForChild(%q,5).Query);local h=game:GetService('HttpService');return Query[%q](h:JSONDecode(%q),h:JSONDecode(%q))"):format(
+			ClientProxy.FOLDER_NAME,
+			method,
+			HttpService:JSONEncode(arguments),
+			HttpService:JSONEncode(extra or {})
+		)
+		local answer, why = ClientProxy.call(code, script.Parent.Runtime, script.Parent.Query, arguments.player)
+		assert(answer ~= nil, why)
+		return answer
+	end
+	local client = proxiesToClient(arguments.datamodel_type)
+	if not client then
+		local mismatch = datamodelMismatch(arguments.datamodel_type)
+		assert(not mismatch, mismatch)
+	end
+	if operation == "inspectStructured" and not arguments.properties then
+		local classes = client and clientCall("classNames") or Query.classNames(arguments)
+		for name in pairs(classes) do
+			propertiesByClass[name] = readableProperties(name)
+		end
+	end
+	local result = client and clientCall(operation, propertiesByClass) or Query[operation](arguments, propertiesByClass)
+	return true, { content = { { type = "text", text = HttpService:JSONEncode(result) } }, structuredContent = result }
+end
+
 function Handlers.inspect_instance(arguments)
+	if arguments.format ~= "text" or arguments.paths or arguments.properties or type(arguments.path) == "table" then
+		return structuredQuery("inspectStructured", arguments)
+	end
 	if proxiesToClient(arguments.datamodel_type) then
 		return clientInspect(arguments)
 	end
@@ -254,6 +292,13 @@ local function unknownClassName(className)
 end
 
 function Handlers.search_game_tree(arguments)
+	if arguments.class_name then
+		local reason = unknownClassName(arguments.class_name)
+		assert(not reason, reason)
+	end
+	if arguments.format ~= "text" or arguments.tags or arguments.attributes or arguments.properties then
+		return structuredQuery("searchStructured", arguments)
+	end
 	local query = arguments.query
 	local needle = type(query) == "string" and query ~= "" and string.lower(query) or nil
 	local className = type(arguments.class_name) == "string" and arguments.class_name ~= "" and arguments.class_name
@@ -262,13 +307,6 @@ function Handlers.search_game_tree(arguments)
 		return false,
 			"search_game_tree needs at least one of `query` (a name substring) or `class_name`. Searching for everything would return the whole place."
 	end
-	if className ~= nil then
-		local refused = unknownClassName(className)
-		if refused ~= nil then
-			return false, refused
-		end
-	end
-
 	local limit = tonumber(arguments.limit) or DEFAULT_SEARCH_LIMIT
 	limit = math.clamp(math.floor(limit), 1, MAX_SEARCH_LIMIT)
 
@@ -507,6 +545,41 @@ function Handlers.set_sync_endpoint(arguments)
 		return true, "This Studio window will sync with " .. endpoint .. "."
 	end
 	return true, "This Studio window was already syncing with " .. endpoint .. "."
+end
+
+local function runtimeOperation(operation, arguments)
+	local result
+	if proxiesToClient(arguments.datamodel_type) then
+		local code = ("local folder=game:GetService('ReplicatedStorage'):WaitForChild(%q, 5); assert(folder, 'Client relay missing'); return require(folder.RuntimeTools)[%q](game:GetService('HttpService'):JSONDecode(%q))"):format(
+			ClientProxy.FOLDER_NAME,
+			operation,
+			HttpService:JSONEncode(arguments)
+		)
+		local answer, why = ClientProxy.call(code, script.Parent.Runtime, script.Parent.Query, arguments.player)
+		if answer == nil then
+			return false, why
+		end
+		result = answer
+	else
+		local mismatch = datamodelMismatch(arguments.datamodel_type)
+		if mismatch then
+			return false, mismatch
+		end
+		result = require(script.Parent.RuntimeTools)[operation](arguments)
+	end
+	return true, { content = { { type = "text", text = HttpService:JSONEncode(result) } }, structuredContent = result }
+end
+
+function Handlers.player_input(arguments)
+	arguments.datamodel_type = "Client"
+	return runtimeOperation("player_input", arguments)
+end
+function Handlers.performance_check(arguments)
+	arguments.datamodel_type = arguments.datamodel_type or "Client"
+	return runtimeOperation("performance_check", arguments)
+end
+function Handlers.__runtime_condition(arguments)
+	return runtimeOperation("condition", arguments)
 end
 
 function Handlers.execute_luau(arguments, context)
@@ -941,14 +1014,10 @@ local function requestedHumanoid(arguments)
 
 	local chosen = nil
 	if type(wanted) == "string" and wanted ~= "" then
-		for _, player in ipairs(players) do
-			if player.Name == wanted or player.DisplayName == wanted then
-				chosen = player
-				break
-			end
-		end
+		local why
+		chosen, why = PlayerTarget.resolve(players, wanted)
 		if chosen == nil then
-			return nil, ("No player named '%s' is in the running game."):format(wanted)
+			return nil, why
 		end
 	elseif #players == 1 then
 		chosen = players[1]
@@ -1093,6 +1162,34 @@ function Handlers.character_navigation(arguments)
 			remaining,
 			tostring(arrivedAt)
 		)
+end
+
+local Playtest = require(script.Parent.Playtest)
+local NativeCapture = require(script.Parent.NativeCapture)
+Handlers.__native_state = function(args)
+	local state = Playtest.state()
+	if args.include_devices then
+		state.devices = require(script.Parent.Devices).list()
+	end
+	return true, { content = {}, _meta = state }
+end
+Handlers.__native_start = function(args)
+	return true, { content = {}, _meta = Playtest.start(args) }
+end
+Handlers.__native_authorize_stop = function(args)
+	return true, { content = {}, _meta = Playtest.authorizeStop(args) }
+end
+Handlers.__native_stop = function(args)
+	return true, { content = {}, _meta = Playtest.stopServer(args) }
+end
+Handlers.__native_ready = function()
+	return true, { content = {}, _meta = ClientProxy.readiness(script.Parent.Runtime, script.Parent.Query) }
+end
+Handlers.__native_capture = function(args)
+	return true, { content = {}, _meta = NativeCapture.acquire(args) }
+end
+Handlers.__native_pixels = function(args)
+	return true, { content = {}, _meta = NativeCapture.pixels(args) }
 end
 
 return Handlers

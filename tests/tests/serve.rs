@@ -11,6 +11,27 @@ use crate::rojo_test::{
 use librojo::web_api::SocketPacketType;
 
 #[test]
+fn vibestarter_identity_is_read_from_the_project_marker() {
+    run_serve_test("empty", |session, _| {
+        assert_eq!(session.get_api_rojo().unwrap().vibestarter_project_id, None);
+        let marker = session.path().join("vibestarter.json");
+        fs::write(&marker, r#"{"id":"d017cffa-7a3f-41b8-b0c8-d4eb6f8f34e9"}"#).unwrap();
+        assert_eq!(
+            session
+                .get_api_rojo()
+                .unwrap()
+                .vibestarter_project_id
+                .as_deref(),
+            Some("d017cffa-7a3f-41b8-b0c8-d4eb6f8f34e9")
+        );
+        for invalid in ["{", "{}", r#"{"id":123}"#] {
+            fs::write(&marker, invalid).unwrap();
+            assert_eq!(session.get_api_rojo().unwrap().vibestarter_project_id, None);
+        }
+    });
+}
+
+#[test]
 fn empty() {
     run_serve_test("empty", |session, mut redactions| {
         let info = session.get_api_rojo().unwrap();
