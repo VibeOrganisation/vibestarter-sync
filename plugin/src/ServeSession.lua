@@ -234,14 +234,10 @@ end
 	seconds. That is the noise in the console, and a load that feeds the very
 	contention that dropped the socket.
 
-	The server keeps every message in an untrimmed queue (see server
-	`message_queue.rs`), so reopening the socket at our last cursor replays
-	exactly the patches we missed and nothing we already applied — the reconciler
-	and instance map are kept intact. So on a drop we check the server is still
-	the same session and, if so, reopen the stream without a resync and without
-	flipping to Disconnected (the user sees nothing). Only a server that changed
-	id or cannot be reached needs the full reconnect, which we surface by
-	rejecting.
+	The server keeps a bounded history (see `message_queue.rs`). A dropped
+	stream resumes only while its cursor is still retained in the same session.
+	An expired cursor, changed session or unreachable server goes through the
+	full reconnect and initial sync; replaying a truncated history would lose edits.
 ]]
 function ServeSession:__streamMessages()
 	return self.__apiContext
@@ -265,9 +261,9 @@ function ServeSession:__streamMessages()
 				return Promise.resolve()
 			end
 
-			return self.__apiContext:hasSameSession():andThen(function(sameSession)
-				if not sameSession then
-					-- The server changed or is unreachable: this is a real
+			return self.__apiContext:canResumeStream():andThen(function(canResume)
+				if not canResume then
+					-- The server changed, is unreachable, or expired our cursor:
 					-- disconnect, and the full reconnect path must run.
 					return Promise.reject(err)
 				end

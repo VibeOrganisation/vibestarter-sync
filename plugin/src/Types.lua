@@ -36,6 +36,8 @@ local ApiSubscribeMessage = t.interface({
 })
 
 local ApiInfoResponse = t.interface({
+	oldestMessageCursor = t.number,
+	messageCursor = t.number,
 	sessionId = t.string,
 	serverVersion = t.string,
 	protocolVersion = t.number,

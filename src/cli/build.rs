@@ -91,8 +91,10 @@ impl BuildCommand {
 
             loop {
                 let receiver = session.message_queue().subscribe(cursor);
-                let (new_cursor, _patch_set) = rt.block_on(receiver).unwrap();
-                cursor = new_cursor;
+                cursor = match rt.block_on(receiver)? {
+                    Ok((new_cursor, _)) => new_cursor,
+                    Err(_) => session.message_queue().cursor(),
+                };
 
                 write_model(&session, &output_path, output_kind)?;
             }

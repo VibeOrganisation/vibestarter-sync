@@ -25,7 +25,7 @@ use crate::{
 pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Current protocol version, which is required to match.
-pub const PROTOCOL_VERSION: u64 = 5;
+pub const PROTOCOL_VERSION: u64 = 6;
 
 /// Message returned by Rojo API when a change has occurred.
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,12 +37,14 @@ pub struct SubscribeMessage<'a> {
 }
 
 impl<'a> SubscribeMessage<'a> {
-    pub(crate) fn from_patch_update(tree: &'a RojoTree, patch: AppliedPatchSet) -> Self {
+    pub(crate) fn from_patch_update(tree: &'a RojoTree, patch: AppliedPatchSet) -> Option<Self> {
         let removed = patch.removed;
 
         let mut added = HashMap::new();
         for id in patch.added {
-            let instance = tree.get_instance(id).unwrap();
+            // An addition may have been removed while the client was offline.
+            // This patch can no longer be reconstructed from the current tree.
+            let instance = tree.get_instance(id)?;
             added.insert(id, Instance::from_rojo_instance(instance));
 
             for instance in tree.descendants(id) {
@@ -75,11 +77,11 @@ impl<'a> SubscribeMessage<'a> {
             })
             .collect();
 
-        Self {
+        Some(Self {
             removed,
             added,
             updated,
-        }
+        })
     }
 }
 
@@ -156,6 +158,8 @@ fn property_filter(value: Option<&Variant>) -> bool {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfoResponse {
+    pub oldest_message_cursor: u32,
+    pub message_cursor: u32,
     pub session_id: SessionId,
     pub server_version: String,
     pub protocol_version: u64,
@@ -180,6 +184,7 @@ pub struct ServerInfoResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VibeStarterStatusResponse {
+    pub message_history: crate::message_queue::HistoryStats,
     pub server_version: String,
     pub protocol_version: u64,
     pub session_id: SessionId,

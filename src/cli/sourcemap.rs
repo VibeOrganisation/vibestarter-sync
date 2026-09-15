@@ -99,10 +99,18 @@ impl SourcemapCommand {
 
             loop {
                 let receiver = session.message_queue().subscribe(cursor);
-                let (new_cursor, patch_set) = rt.block_on(receiver).unwrap();
-                cursor = new_cursor;
+                let needs_write = match rt.block_on(receiver)? {
+                    Ok((new_cursor, patch_set)) => {
+                        cursor = new_cursor;
+                        patch_set_affects_sourcemap(&session, &patch_set, filter)
+                    }
+                    Err(_) => {
+                        cursor = session.message_queue().cursor();
+                        true
+                    }
+                };
 
-                if patch_set_affects_sourcemap(&session, &patch_set, filter) {
+                if needs_write {
                     write_sourcemap(&session, self.output.as_deref(), filter, self.absolute)?;
                 }
             }

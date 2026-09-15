@@ -40,6 +40,7 @@ pub fn snapshot_project(
         None => panic!("Project is missing a name"),
     };
 
+    let incoming_context = context;
     let mut context = context.clone();
     context.clear_sync_rules();
 
@@ -74,6 +75,8 @@ pub fn snapshot_project(
             // conservative approach of snapshotting the project file if any
             // relevant paths changed.
             snapshot.metadata.instigating_source = Some(path.to_path_buf().into());
+            // Replaying this source must start before its own rules were added.
+            snapshot.metadata.context = incoming_context.clone();
 
             // Mark this snapshot (the root node of the project file) as being
             // related to the project file.
@@ -294,6 +297,9 @@ pub fn snapshot_project_node(
         metadata.specified_id = Some(RojoRef::new(id.clone()))
     }
 
+    // The source below replays this node, including any nested project at $path.
+    // Keep the input context, not the nested project's effective context.
+    metadata.context = context.clone();
     metadata.instigating_source = Some(InstigatingSource::ProjectNode {
         path: project_path.to_path_buf(),
         name: instance_name.to_string(),
@@ -660,6 +666,163 @@ mod test {
     use super::*;
 
     use memofs::{InMemoryFs, VfsSnapshot};
+
+    #[test]
+    fn internal_exclusions_keep_runtime_data_and_explicit_compiled_mirror() {
+        let vfs = Vfs::new(InMemoryFs::new());
+        for (path, contents) in [
+            ("/project/src/code.lua", "return 1"),
+            ("/project/src/data.json", "{\"value\":1}"),
+            ("/project/src/.git/metadata.txt", "internal"),
+            ("/project/src/.vibestarter/logs/session.txt", "internal"),
+            (
+                "/project/node_modules/pkg/package.json",
+                "{\"name\":\"pkg\"}",
+            ),
+            ("/project/node_modules/pkg/wally.toml", "name = 'pkg'"),
+            ("/project/node_modules/pkg/runtime.lua", "return 2"),
+            ("/project/node_modules/pkg/data.json", "{\"value\":2}"),
+            (
+                "/project/.vibestarter/rojo-live/out/shared/compiled.lua",
+                "return 3",
+            ),
+        ] {
+            let parents: Vec<_> = Path::new(path).parent().unwrap().ancestors().collect();
+            for parent in parents.into_iter().rev() {
+                if !vfs.exists(parent).unwrap() {
+                    vfs.create_dir(parent).unwrap();
+                }
+            }
+            vfs.write(path, contents.as_bytes()).unwrap();
+        }
+        let project = serde_json::json!({
+            "name": "Scope",
+            "globIgnorePaths": ["**/.git", "**/.vibestarter", "**/node_modules/**/package.json", "**/node_modules/**/wally.toml"],
+            "tree": {
+                "$className": "Folder",
+                "Code": {"$path": "src"},
+                "Dependencies": {"$path": "node_modules"},
+                "Compiled": {"$path": ".vibestarter/rojo-live/out/shared"}
+            }
+        });
+        let path = Path::new("/project/default.project.json");
+        vfs.write(path, &serde_json::to_vec(&project).unwrap())
+            .unwrap();
+        let snapshot = snapshot_from_vfs(&InstanceContext::new(), &vfs, path)
+            .unwrap()
+            .unwrap();
+        fn paths(snapshot: &InstanceSnapshot, prefix: &str, result: &mut Vec<String>) {
+            for child in &snapshot.children {
+                let path = format!("{prefix}/{}", child.name);
+                result.push(path.clone());
+                paths(child, &path, result);
+            }
+        }
+        let mut actual = Vec::new();
+        paths(&snapshot, "", &mut actual);
+        actual.sort();
+        assert_eq!(
+            actual,
+            [
+                "/Code",
+                "/Code/code",
+                "/Code/data",
+                "/Compiled",
+                "/Compiled/compiled",
+                "/Dependencies",
+                "/Dependencies/pkg",
+                "/Dependencies/pkg/data",
+                "/Dependencies/pkg/runtime",
+            ]
+        );
+    }
+
+    #[test]
+    fn resnapshot_project_replaces_local_rules_and_preserves_parent_rules() {
+        let vfs = Vfs::new(InMemoryFs::new());
+        vfs.create_dir_all("/project/src").unwrap();
+        vfs.write("/project/src/keep.lua", b"return 1").unwrap();
+        vfs.write("/project/src/parent.lua", b"return 2").unwrap();
+        vfs.write("/project/src/local.lua", b"return 3").unwrap();
+        let project_path = Path::new("/project/default.project.json");
+        vfs.write(
+            project_path,
+            br#"{"name":"Test","globIgnorePaths":["**/local.lua"],"tree":{"$path":"src"}}"#,
+        )
+        .unwrap();
+        let mut incoming = InstanceContext::new();
+        incoming.add_path_ignore_rules([PathIgnoreRule {
+            base_path: "/project".into(),
+            glob: crate::glob::Glob::new("**/parent.lua").unwrap(),
+        }]);
+        for _ in 0..100 {
+            let snapshot = snapshot_from_vfs(&incoming, &vfs, project_path)
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.children.len(), 1);
+            assert_eq!(snapshot.children[0].name, "keep");
+            assert_eq!(
+                snapshot.children[0]
+                    .metadata
+                    .context
+                    .path_ignore_rules
+                    .len(),
+                2
+            );
+            incoming = snapshot.metadata.context;
+            assert_eq!(incoming.path_ignore_rules.len(), 1);
+        }
+        vfs.write(project_path, br#"{"name":"Test","tree":{"$path":"src"}}"#)
+            .unwrap();
+        let snapshot = snapshot_from_vfs(&incoming, &vfs, project_path)
+            .unwrap()
+            .unwrap();
+        let mut names: Vec<_> = snapshot
+            .children
+            .iter()
+            .map(|child| child.name.as_ref())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["keep", "local"]);
+    }
+
+    #[test]
+    fn resnapshot_node_with_nested_project_keeps_its_input_context() {
+        let vfs = Vfs::new(InMemoryFs::new());
+        vfs.create_dir_all("/project/src").unwrap();
+        vfs.write("/project/src/keep.lua", b"return 1").unwrap();
+        vfs.write("/project/src/hidden.lua", b"return 2").unwrap();
+        vfs.write(
+            "/project/child.project.json",
+            br#"{"name":"Child","globIgnorePaths":["**/hidden.lua"],"tree":{"$path":"src"}}"#,
+        )
+        .unwrap();
+        let node: ProjectNode = serde_json::from_str(r#"{"$path":"child.project.json"}"#).unwrap();
+        let mut context = InstanceContext::new();
+        for _ in 0..100 {
+            let snapshot = snapshot_project_node(
+                &context,
+                Path::new("/project/default.project.json"),
+                "Child",
+                &node,
+                &vfs,
+                None,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(snapshot.children.len(), 1);
+            assert_eq!(
+                snapshot.children[0]
+                    .metadata
+                    .context
+                    .path_ignore_rules
+                    .len(),
+                1
+            );
+            context = snapshot.metadata.context;
+            assert!(context.path_ignore_rules.is_empty());
+        }
+    }
 
     #[ignore = "Functionality moved to root snapshot middleware"]
     #[test]

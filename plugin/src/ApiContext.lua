@@ -147,15 +147,11 @@ end
 --[[
 	Whether the server is still the session we connected to.
 
-	A cheap GET, used before resuming a dropped message stream. The server keeps
-	every message in an untrimmed queue keyed by that session, so if the id still
-	matches, our cursor is still valid and the socket can be reopened at it
-	without re-reading and re-diffing the whole tree. A server that changed id
-	(rojo was restarted) or cannot be reached right now answers false, which
-	sends the caller to the full reconnect path instead of resuming against a
-	server it could not validate.
+	A cheap GET before resuming a dropped stream. The server retains only a
+	bounded replay window. The session AND cursor must still be valid;
+	otherwise ServeSession uses its full reconnect and initial-sync path.
 ]]
-function ApiContext:hasSameSession()
+function ApiContext:canResumeStream()
 	local priorSessionId = self.__sessionId
 	if priorSessionId == nil then
 		return Promise.resolve(false)
@@ -167,6 +163,10 @@ function ApiContext:hasSameSession()
 		:andThen(Http.Response.json)
 		:andThen(function(body)
 			return body.sessionId == priorSessionId
+				and type(body.oldestMessageCursor) == "number"
+				and type(body.messageCursor) == "number"
+				and self.__messageCursor >= body.oldestMessageCursor
+				and self.__messageCursor <= body.messageCursor
 		end)
 		:catch(function()
 			return false
